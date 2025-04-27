@@ -6,12 +6,16 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# 脚本版本号
+SCRIPT_VERSION="1.0.3"
+
 # 脚本路径和文件
 SCRIPT_DIR="/root"
 FORWARD_PY="$SCRIPT_DIR/forward.py"
 LOG_FILE="$SCRIPT_DIR/forward.log"
 VENV_DIR="$SCRIPT_DIR/venv"
 SELF_SCRIPT="$0" # 当前脚本路径
+SUPERVISORD_CONF="/etc/supervisord.conf"
 
 # 检查命令是否存在
 check_command() {
@@ -83,7 +87,7 @@ configure_script() {
     read target_chat_id
 
     # 初始化 accounts 数组
-    accounts=""
+    accounts=()
     account_index=1
 
     # 循环添加小号
@@ -94,11 +98,7 @@ configure_script() {
         read api_hash
 
         # 添加小号到 accounts 数组
-        if [ -z "$accounts" ]; then
-            accounts="    {\n        'api_id': '$api_id',\n        'api_hash': '$api_hash',\n        'session': 'session_account${account_index}'\n    }"
-        else
-            accounts="$accounts,\n    {\n        'api_id': '$api_id',\n        'api_hash': '$api_hash',\n        'session': 'session_account${account_index}'\n    }"
-        fi
+        accounts+=("    {\n        'api_id': '$api_id',\n        'api_hash': '$api_hash',\n        'session': 'session_account${account_index}'\n    }")
 
         # 询问是否继续添加小号，回车默认为 y
         echo -e "${YELLOW}是否继续添加小号？（y/n，回车默认为 y）：${NC}"
@@ -111,6 +111,12 @@ configure_script() {
             break
         fi
         account_index=$((account_index + 1))
+    done
+
+    # 将 accounts 数组转换为字符串，添加换行和逗号
+    accounts_str=$(printf "%s" "${accounts[0]}")
+    for ((i=1; i<${#accounts[@]}; i++)); do
+        accounts_str="$accounts_str,\n${accounts[$i]}"
     done
 
     # 询问是否只转发特定用户/机器人的消息，回车默认为 y
@@ -141,7 +147,7 @@ target_chat_id = $target_chat_id
 
 # 每个账号的配置（api_id, api_hash, session 文件名）
 accounts = [
-$accounts
+$accounts_str
 ]
 
 # 可选：只转发特定用户/机器人的消息（留空则转发所有私聊消息）
@@ -224,9 +230,17 @@ EOL
 
 # 启动脚本
 start_script() {
+    # 清理可能的残留进程和状态
+    pkill -f "supervisord" 2>/dev/null
+    pkill -f "python.*forward.py" 2>/dev/null
+    # 删除 supervisord 的 pid 文件（如果存在）
+    if [ -f "/var/run/supervisord.pid" ]; then
+        rm -f /var/run/supervisord.pid 2>/dev/null
+    fi
+
     # 检查 supervisord 是否已经在运行
     if ! pgrep -f "supervisord" > /dev/null; then
-        supervisord -c /etc/supervisord.conf &> /dev/null
+        supervisord -c $SUPERVISORD_CONF &> /dev/null
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}supervisord 已启动${NC}"
         else
@@ -246,6 +260,9 @@ start_script() {
             echo -e "${RED}脚本启动失败，请检查配置或日志${NC}"
         fi
     fi
+
+    # 延迟 2 秒以确保状态更新
+    sleep 2
 }
 
 # 停止脚本
@@ -264,12 +281,20 @@ stop_script() {
     pkill -f "supervisord" 2>/dev/null
     pkill -f "python.*forward.py" 2>/dev/null
 
+    # 删除 supervisord 的 pid 文件（如果存在）
+    if [ -f "/var/run/supervisord.pid" ]; then
+        rm -f /var/run/supervisord.pid 2>/dev/null
+    fi
+
     # 再次检查是否仍有进程
     if pgrep -f "supervisord" > /dev/null || pgrep -f "python.*forward.py" > /dev/null; then
         echo -e "${RED}停止脚本失败，某些进程仍在运行${NC}"
     else
         echo -e "${GREEN}脚本已停止！${NC}"
     fi
+
+    # 延迟 2 秒以确保状态更新
+    sleep 2
 }
 
 # 重启脚本
@@ -282,7 +307,13 @@ restart_script() {
 
 # 查看日志
 view_log() {
-    tail -f $LOG_FILE
+    if [ -f "$LOG_FILE" ]; then
+        echo -e "${YELLOW}正在查看日志（按 q 退出）...${NC}"
+        less $LOG_FILE
+        echo -e "${GREEN}日志查看完成！${NC}"
+    else
+        echo -e "${RED}日志文件不存在！${NC}"
+    fi
 }
 
 # 查看配置（以 nano 打开 forward.py）
@@ -350,6 +381,7 @@ uninstall_script() {
 # 主菜单
 while true; do
     echo -e "${YELLOW}=== Telegram 消息转发管理工具 ===${NC}"
+    echo -e "${YELLOW}版本: $SCRIPT_VERSION${NC}"
     echo -e "${YELLOW}--- 当前状态 ---${NC}"
     check_script_status
     check_venv_status
