@@ -25,14 +25,6 @@
 
 ### 1. 下载并运行脚本
 
-只需一行命令即可下载并运行脚本：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/telegram_forward.sh | bash
-```
-
-> **注意**：此命令会自动下载脚本并执行。如果需要手动检查脚本内容，可以分步操作：
->
 > ```bash
 > curl -fsSL https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/telegram_forward.sh -o telegram_forward.sh
 > chmod +x telegram_forward.sh
