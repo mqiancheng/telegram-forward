@@ -7,22 +7,83 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.0.7"
+SCRIPT_VERSION="1.2.0"
+
+# 检测当前用户的主目录
+if [ "$HOME" = "/root" ]; then
+    USER_HOME="/root"
+else
+    USER_HOME="$HOME"
+fi
 
 # 脚本路径和文件
-SCRIPT_DIR="/root"
+SCRIPT_DIR="$USER_HOME"
 FORWARD_PY="$SCRIPT_DIR/forward.py"
 LOG_FILE="$SCRIPT_DIR/forward.log"
 VENV_DIR="$SCRIPT_DIR/venv"
 SELF_SCRIPT="$0" # 当前脚本路径
-SUPERVISORD_CONF="/etc/supervisord.conf"
+CONFIG_FILE="$SCRIPT_DIR/.telegram_forward.conf"
 
-# 检查命令是否存在
+# 检测系统类型
+if [ -f "/etc/os-release" ]; then
+    . /etc/os-release
+    OS_TYPE="$ID"
+else
+    OS_TYPE="unknown"
+fi
+
+# 根据系统类型设置 supervisord 配置路径
+if [ "$OS_TYPE" = "alpine" ]; then
+    SUPERVISORD_CONF="/etc/supervisord.conf"
+    SUPERVISOR_DIR="/etc/supervisor.d"
+elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+    SUPERVISORD_CONF="/etc/supervisor/supervisord.conf"
+    SUPERVISOR_DIR="/etc/supervisor/conf.d"
+elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+    SUPERVISORD_CONF="/etc/supervisord.conf"
+    SUPERVISOR_DIR="/etc/supervisord.d"
+else
+    SUPERVISORD_CONF="/etc/supervisord.conf"
+    SUPERVISOR_DIR="/etc/supervisor.d"
+fi
+
+# 配置选项：是否默认停止 supervisord（默认为 true）
+# 如果系统中有其他应用也使用 supervisord，请将此选项设置为 false
+STOP_SUPERVISORD_DEFAULT=true
+
+# 加载配置文件（如果存在）
+if [ -f "$CONFIG_FILE" ]; then
+    . "$CONFIG_FILE"
+fi
+
+# 检查命令是否存在并安装（支持多种包管理器）
 check_command() {
     if ! command -v $1 &> /dev/null; then
         echo -e "${RED}$1 未安装，正在安装...${NC}"
-        apk add $1
+
+        # 根据系统类型使用不同的包管理器
+        if [ "$OS_TYPE" = "alpine" ]; then
+            apk add $1
+        elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+            apt-get update && apt-get install -y $1
+        elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+            if command -v dnf &> /dev/null; then
+                dnf install -y $1
+            else
+                yum install -y $1
+            fi
+        else
+            echo -e "${RED}无法确定系统类型，请手动安装 $1${NC}"
+            return 1
+        fi
+
+        # 检查安装是否成功
+        if ! command -v $1 &> /dev/null; then
+            echo -e "${RED}安装 $1 失败，请手动安装${NC}"
+            return 1
+        fi
     fi
+    return 0
 }
 
 # 检查脚本运行状态
@@ -30,7 +91,7 @@ check_script_status() {
     local max_retries=3
     local retry_delay=2
     local status="未知"
-    
+
     for ((i=1; i<=$max_retries; i++)); do
         if pgrep -f "supervisord" > /dev/null; then
             if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
@@ -44,17 +105,26 @@ check_script_status() {
             status="运行中"
             break
         fi
-        
+
         if [ $i -lt $max_retries ]; then
             sleep $retry_delay
         fi
     done
-    
+
     case "$status" in
         "运行中") echo -e "${GREEN}脚本正在运行${NC}" ;;
         "已停止") echo -e "${RED}脚本未运行${NC}" ;;
         *) echo -e "${RED}脚本未运行${NC}" ;;
     esac
+}
+
+# 检查 supervisord 运行状态
+check_supervisord_status() {
+    if pgrep -f "supervisord" > /dev/null; then
+        echo -e "${GREEN}supervisord 正在运行${NC}"
+    else
+        echo -e "${RED}supervisord 未运行${NC}"
+    fi
 }
 
 # 检查虚拟环境状态
@@ -78,19 +148,99 @@ check_config_status() {
 # 安装依赖
 install_dependencies() {
     echo -e "${YELLOW}正在更新包索引...${NC}"
-    apk update
-    check_command python3
-    check_command py3-pip
+
+    # 根据系统类型更新包索引
+    if [ "$OS_TYPE" = "alpine" ]; then
+        apk update
+    elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+        apt-get update
+    elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+        if command -v dnf &> /dev/null; then
+            dnf check-update
+        else
+            yum check-update
+        fi
+    fi
+
+    # 安装 Python 和 pip
+    if [ "$OS_TYPE" = "alpine" ]; then
+        check_command python3
+        check_command py3-pip
+    elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+        check_command python3
+        check_command python3-pip
+    elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+        check_command python3
+        check_command python3-pip
+    else
+        echo -e "${YELLOW}请确保已安装 Python3 和 pip${NC}"
+    fi
+
+    # 安装 venv 模块（某些系统中可能需要单独安装）
+    if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+        apt-get install -y python3-venv
+    elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+        if command -v dnf &> /dev/null; then
+            dnf install -y python3-virtualenv
+        else
+            yum install -y python3-virtualenv
+        fi
+    fi
+
+    # 创建虚拟环境
     if [ ! -d "$VENV_DIR" ]; then
         echo -e "${YELLOW}创建虚拟环境...${NC}"
         python3 -m venv $VENV_DIR
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}创建虚拟环境失败，请检查 Python 安装${NC}"
+            return 1
+        fi
     fi
-    source $VENV_DIR/bin/activate
+
+    # 激活虚拟环境
+    if [ -f "$VENV_DIR/bin/activate" ]; then
+        source $VENV_DIR/bin/activate
+    else
+        echo -e "${RED}虚拟环境激活脚本不存在${NC}"
+        return 1
+    fi
+
+    # 安装 Telethon
     echo -e "${YELLOW}安装 Telethon...${NC}"
     pip install telethon --no-cache-dir
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}安装 Telethon 失败${NC}"
+        return 1
+    fi
+
+    # 安装 supervisor
     echo -e "${YELLOW}安装 supervisord...${NC}"
-    apk add supervisor
+    if [ "$OS_TYPE" = "alpine" ]; then
+        apk add supervisor
+    elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+        apt-get install -y supervisor
+    elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+        if command -v dnf &> /dev/null; then
+            dnf install -y supervisor
+        else
+            yum install -y supervisor
+        fi
+    else
+        echo -e "${RED}无法确定系统类型，请手动安装 supervisor${NC}"
+        return 1
+    fi
+
+    # 确保 supervisor 服务启动
+    if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+        systemctl enable supervisor
+        systemctl start supervisor
+    elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+        systemctl enable supervisord
+        systemctl start supervisord
+    fi
+
     echo -e "${GREEN}依赖安装完成！${NC}"
+    return 0
 }
 
 # 配置 forward.py 脚本
@@ -214,8 +364,11 @@ EOL
 
 # 配置 supervisord
 configure_supervisord() {
-    mkdir -p /etc/supervisor.d
-    cat > /etc/supervisor.d/forward.ini << EOL
+    # 创建 supervisor 配置目录
+    mkdir -p $SUPERVISOR_DIR
+
+    # 创建 forward 程序配置文件
+    cat > $SUPERVISOR_DIR/forward.ini << EOL
 [program:forward]
 command=$VENV_DIR/bin/python $FORWARD_PY
 directory=$SCRIPT_DIR
@@ -226,7 +379,22 @@ stopwaitsecs=10
 stdout_logfile=$LOG_FILE
 stderr_logfile=$LOG_FILE
 EOL
-    echo -e "${GREEN}supervisord 已配置！${NC}"
+
+    # 检查配置文件是否成功创建
+    if [ -f "$SUPERVISOR_DIR/forward.ini" ]; then
+        echo -e "${GREEN}supervisord 已配置！${NC}"
+
+        # 重新加载 supervisor 配置
+        if command -v supervisorctl &> /dev/null; then
+            supervisorctl reread
+            supervisorctl update
+        fi
+    else
+        echo -e "${RED}supervisord 配置失败！${NC}"
+        return 1
+    fi
+
+    return 0
 }
 
 # 配置日志轮转
@@ -248,48 +416,151 @@ EOL
 # 启动脚本
 start_script() {
     echo -e "${YELLOW}正在启动服务...${NC}"
-    
+
+    # 检查 forward.py 是否存在
+    if [ ! -f "$FORWARD_PY" ]; then
+        echo -e "${RED}forward.py 文件不存在，请先配置脚本！${NC}"
+        return 1
+    fi
+
+    # 检查虚拟环境是否存在
+    if [ ! -d "$VENV_DIR" ]; then
+        echo -e "${RED}虚拟环境不存在，请先安装依赖！${NC}"
+        return 1
+    fi
+
     # 清理残留进程和状态文件
     cleanup_processes
-    
+
     # 启动 supervisord（如果未运行）
     if ! pgrep -f "supervisord" > /dev/null; then
-        supervisord -c $SUPERVISORD_CONF &> /dev/null
-        sleep 2
+        echo -e "${YELLOW}正在启动 supervisord...${NC}"
+
+        # 根据系统类型启动 supervisord
+        if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+            systemctl start supervisor
+            sleep 2
+        elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+            systemctl start supervisord
+            sleep 2
+        else
+            supervisord -c $SUPERVISORD_CONF &> /dev/null
+            sleep 2
+        fi
+
+        # 检查 supervisord 是否成功启动
+        if ! pgrep -f "supervisord" > /dev/null; then
+            echo -e "${RED}supervisord 启动失败，请检查配置${NC}"
+            return 1
+        fi
     fi
-    
+
     # 启动 forward 任务
+    echo -e "${YELLOW}正在启动转发脚本...${NC}"
     if ! supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
         supervisorctl start forward &> /dev/null
         sleep 3  # 等待启动完成
-        
+
         if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
             echo -e "${GREEN}脚本已成功启动！${NC}"
         else
             echo -e "${RED}脚本启动失败，请检查日志${NC}"
+            echo -e "${YELLOW}可能的原因：${NC}"
+            echo -e "1. Telegram API 凭证错误"
+            echo -e "2. 网络连接问题"
+            echo -e "3. Python 依赖问题"
+            echo -e "${YELLOW}请使用选项 7 查看日志以获取详细错误信息${NC}"
+            return 1
         fi
     else
         echo -e "${YELLOW}脚本已在运行中${NC}"
     fi
+
+    return 0
 }
 
 # 停止脚本
 stop_script() {
     echo -e "${YELLOW}正在停止服务...${NC}"
-    
+
+    # 检查 supervisorctl 命令是否可用
+    if ! command -v supervisorctl &> /dev/null; then
+        echo -e "${RED}supervisorctl 命令不可用，请确保 supervisor 已安装${NC}"
+        # 尝试直接杀死进程
+        pkill -f "python.*forward.py" 2>/dev/null
+        echo -e "${YELLOW}已尝试直接终止 forward.py 进程${NC}"
+        return 1
+    fi
+
+    # 停止 forward 任务
     if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
+        echo -e "${YELLOW}正在停止转发脚本...${NC}"
         supervisorctl stop forward &> /dev/null
         sleep 2
-    fi
-    
-    cleanup_processes
-    
-    # 验证停止状态
-    if ! pgrep -f "python.*forward.py" > /dev/null; then
-        echo -e "${GREEN}脚本已成功停止！${NC}"
     else
-        echo -e "${RED}脚本停止失败${NC}"
+        echo -e "${YELLOW}转发脚本未在 supervisor 中运行${NC}"
     fi
+
+    # 清理可能残留的进程
+    cleanup_processes
+
+    # 验证 forward.py 停止状态
+    if ! pgrep -f "python.*forward.py" > /dev/null; then
+        echo -e "${GREEN}转发脚本已成功停止！${NC}"
+    else
+        echo -e "${RED}转发脚本停止失败，尝试强制终止...${NC}"
+        pkill -9 -f "python.*forward.py" 2>/dev/null
+        sleep 1
+
+        if ! pgrep -f "python.*forward.py" > /dev/null; then
+            echo -e "${GREEN}转发脚本已强制停止！${NC}"
+        else
+            echo -e "${RED}无法停止转发脚本，请手动检查进程${NC}"
+            return 1
+        fi
+    fi
+
+    # 保存当前 supervisord 停止设置到配置文件
+    save_config
+
+    # 根据配置决定是否停止 supervisord
+    if [ "$STOP_SUPERVISORD_DEFAULT" = true ]; then
+        echo -e "${YELLOW}正在停止 supervisord...${NC}"
+
+        # 根据系统类型停止 supervisord
+        if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+            systemctl stop supervisor
+            sleep 1
+        elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+            systemctl stop supervisord
+            sleep 1
+        else
+            pkill -f "supervisord" 2>/dev/null
+            sleep 1
+        fi
+
+        # 如果进程仍然存在，使用强制终止
+        if pgrep -f "supervisord" > /dev/null; then
+            echo -e "${YELLOW}尝试强制终止 supervisord 进程...${NC}"
+            pkill -9 -f "supervisord" 2>/dev/null
+            sleep 1
+        fi
+
+        # 清理 PID 文件
+        cleanup_pid_files
+
+        # 验证 supervisord 停止状态
+        if ! pgrep -f "supervisord" > /dev/null; then
+            echo -e "${GREEN}supervisord 已成功停止！${NC}"
+        else
+            echo -e "${RED}supervisord 停止失败，请手动停止${NC}"
+            return 1
+        fi
+    else
+        echo -e "${YELLOW}根据配置，保留 supervisord 进程运行${NC}"
+    fi
+
+    return 0
 }
 
 # 重启脚本
@@ -340,10 +611,21 @@ uninstall_script() {
     # 停止 supervisord 和 forward 进程
     if command -v supervisorctl &> /dev/null; then
         supervisorctl stop forward 2>/dev/null
-        pkill -f "supervisord" 2>/dev/null
+        sleep 2
     fi
+
     # 杀死所有相关 Python 进程（forward.py）
     pkill -f "python.*forward.py" 2>/dev/null
+
+    # 确保 supervisord 进程被停止
+    pkill -f "supervisord" 2>/dev/null
+    sleep 1
+
+    # 如果进程仍然存在，使用强制终止
+    if pgrep -f "supervisord" > /dev/null; then
+        echo -e "${YELLOW}尝试强制终止 supervisord 进程...${NC}"
+        pkill -9 -f "supervisord" 2>/dev/null
+    fi
 
     echo -e "${YELLOW}正在删除相关文件和配置...${NC}"
     # 删除 forward.py
@@ -359,10 +641,20 @@ uninstall_script() {
     # 删除 Telegram 会话文件
     rm -f "$SCRIPT_DIR/session_account*.session" 2>/dev/null && echo -e "${GREEN}已删除会话文件${NC}"
 
-    echo -e "${YELLOW}正在卸载相关程序...${NC}"
-    # 卸载 supervisor
-    if command -v apk &> /dev/null; then
-        apk del supervisor 2>/dev/null && echo -e "${GREEN}已卸载 supervisor${NC}"
+    echo -e "${YELLOW}是否同时卸载 supervisor？（y/n，回车默认为 n）：${NC}"
+    read uninstall_supervisor
+    # 如果用户直接按回车，设置默认值为 n
+    if [ -z "$uninstall_supervisor" ]; then
+        uninstall_supervisor="n"
+    fi
+
+    if [ "$uninstall_supervisor" = "y" ]; then
+        echo -e "${YELLOW}正在卸载 supervisor...${NC}"
+        if command -v apk &> /dev/null; then
+            apk del supervisor 2>/dev/null && echo -e "${GREEN}已卸载 supervisor${NC}"
+        fi
+    else
+        echo -e "${YELLOW}保留 supervisor 安装${NC}"
     fi
 
     echo -e "${YELLOW}正在删除脚本自身...${NC}"
@@ -373,12 +665,166 @@ uninstall_script() {
     exit 0
 }
 
-# 新增进程清理函数（减少代码重复）
+# 保存配置到文件
+save_config() {
+    # 创建配置文件目录（如果不存在）
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+
+    # 写入配置
+    cat > "$CONFIG_FILE" << EOL
+# Telegram Forward 配置文件
+# 自动生成于 $(date)
+STOP_SUPERVISORD_DEFAULT=$STOP_SUPERVISORD_DEFAULT
+EOL
+
+    # 设置适当的权限
+    chmod 600 "$CONFIG_FILE"
+}
+
+# 清理 PID 文件函数
+cleanup_pid_files() {
+    # 清理 supervisord PID 文件（如果存在）
+    local pid_files=(
+        "/var/run/supervisord.pid"
+        "/run/supervisord.pid"
+        "/var/run/supervisor/supervisord.pid"
+        "/var/run/supervisor.pid"
+        "/tmp/supervisord.pid"
+    )
+
+    for pid_file in "${pid_files[@]}"; do
+        if [ -f "$pid_file" ]; then
+            rm -f "$pid_file" 2>/dev/null
+            echo -e "${YELLOW}已清理 PID 文件: $pid_file${NC}"
+        fi
+    done
+}
+
+# 进程清理函数（减少代码重复）
 cleanup_processes() {
-    pkill -f "python.*forward.py" 2>/dev/null
-    
-    if [ -f "/var/run/supervisord.pid" ]; then
-        rm -f /var/run/supervisord.pid 2>/dev/null
+    # 杀死所有 forward.py 相关进程
+    if pgrep -f "python.*forward.py" > /dev/null; then
+        pkill -f "python.*forward.py" 2>/dev/null
+        echo -e "${YELLOW}已终止 forward.py 进程${NC}"
+    fi
+}
+
+# 备份配置
+backup_config() {
+    echo -e "${YELLOW}正在备份配置...${NC}"
+
+    # 检查 forward.py 是否存在
+    if [ ! -f "$FORWARD_PY" ]; then
+        echo -e "${RED}forward.py 文件不存在，无法备份${NC}"
+        return 1
+    fi
+
+    # 创建备份目录
+    local backup_dir="$SCRIPT_DIR/backup"
+    local timestamp=$(date +"%Y%m%d_%H%M%S")
+    local backup_file="$backup_dir/forward_backup_$timestamp.tar.gz"
+
+    mkdir -p "$backup_dir"
+
+    # 创建备份文件
+    tar -czf "$backup_file" -C "$SCRIPT_DIR" $(basename "$FORWARD_PY") $(basename "$CONFIG_FILE" 2>/dev/null) $(basename "$SCRIPT_DIR"/session_account*.session 2>/dev/null)
+
+    if [ $? -eq 0 ] && [ -f "$backup_file" ]; then
+        echo -e "${GREEN}配置已备份到: $backup_file${NC}"
+        echo -e "${YELLOW}备份内容: forward.py, 会话文件, 配置文件${NC}"
+        return 0
+    else
+        echo -e "${RED}备份失败${NC}"
+        return 1
+    fi
+}
+
+# 恢复配置
+restore_config() {
+    echo -e "${YELLOW}可用的备份文件:${NC}"
+
+    # 检查备份目录
+    local backup_dir="$SCRIPT_DIR/backup"
+    if [ ! -d "$backup_dir" ]; then
+        echo -e "${RED}备份目录不存在${NC}"
+        return 1
+    fi
+
+    # 列出备份文件
+    local backup_files=("$backup_dir"/forward_backup_*.tar.gz)
+    if [ ${#backup_files[@]} -eq 0 ] || [ ! -f "${backup_files[0]}" ]; then
+        echo -e "${RED}没有找到备份文件${NC}"
+        return 1
+    fi
+
+    local i=1
+    for file in "${backup_files[@]}"; do
+        if [ -f "$file" ]; then
+            echo "$i. $(basename "$file")"
+            i=$((i+1))
+        fi
+    done
+
+    # 选择备份文件
+    echo -e "${YELLOW}请选择要恢复的备份文件编号（输入 0 取消）:${NC}"
+    read backup_choice
+
+    if [ -z "$backup_choice" ] || [ "$backup_choice" -eq 0 ]; then
+        echo -e "${YELLOW}已取消恢复操作${NC}"
+        return 0
+    fi
+
+    if [ "$backup_choice" -gt 0 ] && [ "$backup_choice" -lt "$i" ]; then
+        local selected_file="${backup_files[$((backup_choice-1))]}"
+
+        # 停止脚本
+        stop_script
+
+        # 恢复文件
+        echo -e "${YELLOW}正在恢复配置...${NC}"
+        tar -xzf "$selected_file" -C "$SCRIPT_DIR"
+
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}配置已成功恢复！${NC}"
+            # 重新加载配置
+            if [ -f "$CONFIG_FILE" ]; then
+                . "$CONFIG_FILE"
+            fi
+            return 0
+        else
+            echo -e "${RED}恢复失败${NC}"
+            return 1
+        fi
+    else
+        echo -e "${RED}无效的选择${NC}"
+        return 1
+    fi
+}
+
+# 显示系统信息
+show_system_info() {
+    echo -e "${YELLOW}系统信息:${NC}"
+    echo -e "操作系统: $OS_TYPE"
+    echo -e "Python 版本: $(python3 --version 2>/dev/null || echo '未安装')"
+    echo -e "Supervisor 配置: $SUPERVISORD_CONF"
+    echo -e "脚本目录: $SCRIPT_DIR"
+    echo -e "虚拟环境: $VENV_DIR"
+
+    # 检查网络连接
+    echo -e "${YELLOW}网络连接测试:${NC}"
+    if ping -c 1 api.telegram.org &> /dev/null; then
+        echo -e "${GREEN}Telegram API 可访问${NC}"
+    else
+        echo -e "${RED}Telegram API 不可访问${NC}"
+    fi
+}
+
+# 显示 supervisord 停止配置状态
+show_supervisord_config() {
+    if [ "$STOP_SUPERVISORD_DEFAULT" = true ]; then
+        echo -e "${GREEN}停止脚本时将同时停止 supervisord${NC}"
+    else
+        echo -e "${YELLOW}停止脚本时将保留 supervisord 运行${NC}"
     fi
 }
 
@@ -388,8 +834,10 @@ show_menu() {
     echo -e "${YELLOW}版本: $SCRIPT_VERSION${NC}"
     echo -e "${YELLOW}--- 当前状态 ---${NC}"
     check_script_status
+    check_supervisord_status
     check_venv_status
     check_config_status
+    show_supervisord_config
     echo -e "${YELLOW}----------------${NC}"
     echo "1. 安装依赖"
     echo "2. 配置脚本"
@@ -398,9 +846,53 @@ show_menu() {
     echo "5. 重启脚本"
     echo "6. 查看配置"
     echo "7. 查看日志（按q可退出查看日志）"
-    echo "8. 卸载脚本"
-    echo "9. 退出"
+    echo "8. 备份/恢复配置"
+    echo "9. 切换 supervisord 停止设置"
+    echo "10. 系统信息"
+    echo "11. 卸载脚本"
+    echo "0. 退出"
     echo -e "${YELLOW}请选择一个选项：${NC}"
+}
+
+# 切换 supervisord 停止设置
+toggle_supervisord_setting() {
+    if [ "$STOP_SUPERVISORD_DEFAULT" = true ]; then
+        STOP_SUPERVISORD_DEFAULT=false
+        echo -e "${YELLOW}已修改设置：停止脚本时将保留 supervisord 运行${NC}"
+    else
+        STOP_SUPERVISORD_DEFAULT=true
+        echo -e "${GREEN}已修改设置：停止脚本时将同时停止 supervisord${NC}"
+    fi
+
+    # 保存设置到配置文件
+    save_config
+
+    echo -e "${GREEN}设置已保存，将在下次启动时自动加载${NC}"
+}
+
+# 备份/恢复菜单
+backup_restore_menu() {
+    echo -e "${YELLOW}=== 备份/恢复菜单 ===${NC}"
+    echo "1. 备份配置"
+    echo "2. 恢复配置"
+    echo "0. 返回主菜单"
+    echo -e "${YELLOW}请选择一个选项：${NC}"
+
+    read backup_choice
+    case $backup_choice in
+        1)
+            backup_config
+            ;;
+        2)
+            restore_config
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "${RED}无效选项，请重试！${NC}"
+            ;;
+    esac
 }
 
 # 主循环
@@ -411,8 +903,10 @@ while true; do
     case $choice in
         1)
             install_dependencies
-            configure_supervisord
-            configure_logrotate
+            if [ $? -eq 0 ]; then
+                configure_supervisord
+                configure_logrotate
+            fi
             ;;
         2)
             configure_script
@@ -425,7 +919,9 @@ while true; do
             ;;
         5)
             stop_script
-            start_script
+            if [ $? -eq 0 ]; then
+                start_script
+            fi
             ;;
         6)
             view_config
@@ -434,9 +930,18 @@ while true; do
             view_log
             ;;
         8)
-            uninstall_script
+            backup_restore_menu
             ;;
         9)
+            toggle_supervisord_setting
+            ;;
+        10)
+            show_system_info
+            ;;
+        11)
+            uninstall_script
+            ;;
+        0)
             echo -e "${GREEN}退出程序${NC}"
             exit 0
             ;;
@@ -444,4 +949,8 @@ while true; do
             echo -e "${RED}无效选项，请重试！${NC}"
             ;;
     esac
+
+    # 每次操作后暂停，让用户有时间查看输出
+    echo -e "${YELLOW}按 Enter 键继续...${NC}"
+    read
 done
