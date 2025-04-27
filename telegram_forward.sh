@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.0.6"
+SCRIPT_VERSION="1.0.7"
 
 # 脚本路径和文件
 SCRIPT_DIR="/root"
@@ -27,22 +27,34 @@ check_command() {
 
 # 检查脚本运行状态
 check_script_status() {
-    # 首先检查 supervisord 是否运行
-    if pgrep -f "supervisord" > /dev/null; then
-        # 检查 forward 任务状态
-        if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
-            echo -e "${GREEN}脚本正在运行${NC}"
-        else
-            echo -e "${RED}脚本未运行${NC}"
+    local max_retries=3
+    local retry_delay=2
+    local status="未知"
+    
+    for ((i=1; i<=$max_retries; i++)); do
+        if pgrep -f "supervisord" > /dev/null; then
+            if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
+                status="运行中"
+                break
+            elif supervisorctl status forward 2>/dev/null | grep -q "STOPPED"; then
+                status="已停止"
+                break
+            fi
+        elif pgrep -f "python.*forward.py" > /dev/null; then
+            status="运行中"
+            break
         fi
-    else
-        # 如果 supervisord 未运行，检查是否有 forward.py 的 Python 进程
-        if pgrep -f "python.*forward.py" > /dev/null; then
-            echo -e "${GREEN}脚本正在运行${NC}"
-        else
-            echo -e "${RED}脚本未运行${NC}"
+        
+        if [ $i -lt $max_retries ]; then
+            sleep $retry_delay
         fi
-    fi
+    done
+    
+    case "$status" in
+        "运行中") echo -e "${GREEN}脚本正在运行${NC}" ;;
+        "已停止") echo -e "${RED}脚本未运行${NC}" ;;
+        *) echo -e "${RED}脚本未运行${NC}" ;;
+    esac
 }
 
 # 检查虚拟环境状态
@@ -83,7 +95,7 @@ install_dependencies() {
 
 # 配置 forward.py 脚本
 configure_script() {
-    echo -e "${YELLOW}请输入大号群组的 Chat ID（例如 -4688142035）：${NC}"
+    echo -e "${YELLOW}请输入大号群组/个人的 Chat ID（例如 -4688142035）：${NC}"
     read target_chat_id
 
     # 初始化 accounts 数组
@@ -196,6 +208,7 @@ EOL
 
     # 配置完成后自动启动脚本
     echo -e "${YELLOW}正在自动启动脚本...${NC}"
+    sleep 2  # 确保配置文件已写入
     start_script
 }
 
@@ -234,72 +247,48 @@ EOL
 
 # 启动脚本
 start_script() {
-    # 清理可能的残留进程和状态
-    pkill -f "supervisord" 2>/dev/null
-    pkill -f "python.*forward.py" 2>/dev/null
-    # 删除 supervisord 的 pid 文件（如果存在）
-    if [ -f "/var/run/supervisord.pid" ]; then
-        rm -f /var/run/supervisord.pid 2>/dev/null
-    fi
-
-    # 检查 supervisord 是否已经在运行
+    echo -e "${YELLOW}正在启动服务...${NC}"
+    
+    # 清理残留进程和状态文件
+    cleanup_processes
+    
+    # 启动 supervisord（如果未运行）
     if ! pgrep -f "supervisord" > /dev/null; then
         supervisord -c $SUPERVISORD_CONF &> /dev/null
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}supervisord 已启动${NC}"
-        else
-            echo -e "${RED}supervisord 启动失败${NC}"
-            return 1
-        fi
+        sleep 2
     fi
-
-    # 检查 forward 任务状态
-    if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
-        echo -e "${YELLOW}脚本已在运行，无需重复启动${NC}"
+    
+    # 启动 forward 任务
+    if ! supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
+        supervisorctl start forward &> /dev/null
+        sleep 3  # 等待启动完成
+        
+        if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
+            echo -e "${GREEN}脚本已成功启动！${NC}"
+        else
+            echo -e "${RED}脚本启动失败，请检查日志${NC}"
+        fi
     else
-        supervisorctl start forward 2>/dev/null
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}脚本已启动！${NC}"
-        else
-            echo -e "${RED}脚本启动失败，请检查配置或日志${NC}"
-        fi
+        echo -e "${YELLOW}脚本已在运行中${NC}"
     fi
-
-    # 延迟6秒后再次检查状态
-    echo -e "${YELLOW}正在等待服务启动...${NC}"
-    sleep 6
 }
 
 # 停止脚本
 stop_script() {
-    # 停止 forward 任务
+    echo -e "${YELLOW}正在停止服务...${NC}"
+    
     if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
-        supervisorctl stop forward 2>/dev/null
-        if [ $? -eq 0 ]; then
-            echo -e "${GREEN}forward 任务已停止${NC}"
-        else
-            echo -e "${RED}停止 forward 任务失败${NC}"
-        fi
+        supervisorctl stop forward &> /dev/null
+        sleep 2
     fi
-
-    # 杀死 supervisord 和 forward.py 进程
-    pkill -f "supervisord" 2>/dev/null
-    pkill -f "python.*forward.py" 2>/dev/null
-
-    # 删除 supervisord 的 pid 文件（如果存在）
-    if [ -f "/var/run/supervisord.pid" ]; then
-        rm -f /var/run/supervisord.pid 2>/dev/null
-    fi
-
-    # 延迟6秒后再次检查状态
-    echo -e "${YELLOW}正在等待服务停止...${NC}"
-    sleep 6
-
-    # 再次检查是否仍有进程
-    if pgrep -f "supervisord" > /dev/null || pgrep -f "python.*forward.py" > /dev/null; then
-        echo -e "${RED}停止脚本失败，某些进程仍在运行${NC}"
+    
+    cleanup_processes
+    
+    # 验证停止状态
+    if ! pgrep -f "python.*forward.py" > /dev/null; then
+        echo -e "${GREEN}脚本已成功停止！${NC}"
     else
-        echo -e "${GREEN}脚本已停止！${NC}"
+        echo -e "${RED}脚本停止失败${NC}"
     fi
 }
 
@@ -382,6 +371,15 @@ uninstall_script() {
 
     echo -e "${GREEN}卸载完成！程序即将退出。${NC}"
     exit 0
+}
+
+# 新增进程清理函数（减少代码重复）
+cleanup_processes() {
+    pkill -f "python.*forward.py" 2>/dev/null
+    
+    if [ -f "/var/run/supervisord.pid" ]; then
+        rm -f /var/run/supervisord.pid 2>/dev/null
+    fi
 }
 
 # 主菜单
