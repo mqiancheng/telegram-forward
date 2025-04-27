@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.0.3"
+SCRIPT_VERSION="1.0.4"
 
 # 脚本路径和文件
 SCRIPT_DIR="/root"
@@ -97,8 +97,13 @@ configure_script() {
         echo -e "${YELLOW}请输入小号${account_index}的 api_hash（从 my.telegram.org 获取）：${NC}"
         read api_hash
 
-        # 添加小号到 accounts 数组
-        accounts+=("    {\n        'api_id': '$api_id',\n        'api_hash': '$api_hash',\n        'session': 'session_account${account_index}'\n    }")
+        # 添加小号到 accounts 数组（使用正确的换行格式）
+        account_entry="    {
+        'api_id': '$api_id',
+        'api_hash': '$api_hash',
+        'session': 'session_account${account_index}'
+    }"
+        accounts+=("$account_entry")
 
         # 询问是否继续添加小号，回车默认为 y
         echo -e "${YELLOW}是否继续添加小号？（y/n，回车默认为 y）：${NC}"
@@ -113,11 +118,10 @@ configure_script() {
         account_index=$((account_index + 1))
     done
 
-    # 将 accounts 数组转换为字符串，添加换行和逗号
-    accounts_str=$(printf "%s" "${accounts[0]}")
-    for ((i=1; i<${#accounts[@]}; i++)); do
-        accounts_str="$accounts_str,\n${accounts[$i]}"
-    done
+    # 将 accounts 数组转换为字符串，添加逗号和换行
+    IFS=","
+    accounts_str=$(echo "${accounts[*]}")
+    unset IFS
 
     # 询问是否只转发特定用户/机器人的消息，回车默认为 y
     echo -e "${YELLOW}是否只转发特定用户/机器人的消息？（y/n，回车默认为 y）：${NC}"
