@@ -397,7 +397,7 @@ while true; do
     echo "4. 停止脚本"
     echo "5. 重启脚本"
     echo "6. 查看配置"
-    echo "7. 查看日志"
+    echo "7. 查看日志（按q可退出查看日志）"
     echo "8. 卸载脚本"
     echo "9. 退出"
     echo -e "${YELLOW}请选择一个选项：${NC}"
