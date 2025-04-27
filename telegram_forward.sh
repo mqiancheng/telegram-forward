@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.2.0"
+SCRIPT_VERSION="1.3.0"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -594,7 +594,8 @@ view_config() {
 
 # 卸载脚本
 uninstall_script() {
-    echo -e "${RED}警告：卸载脚本将删除所有相关文件和配置，包括 forward.py、日志、虚拟环境等！${NC}"
+    echo -e "${RED}警告：卸载脚本将删除除备份文件外的所有相关文件和配置！${NC}"
+    echo -e "${YELLOW}备份文件位于 $SCRIPT_DIR/backup 目录，包含您的配置和会话文件。${NC}"
     echo -e "${YELLOW}是否确认卸载脚本？（y/n，回车默认为 n）：${NC}"
     read confirm_uninstall
     # 如果用户直接按回车，设置默认值为 n
@@ -608,38 +609,110 @@ uninstall_script() {
     fi
 
     echo -e "${YELLOW}正在停止脚本和相关进程...${NC}"
+
+    # 如果在虚拟环境中，先退出虚拟环境
+    if [ -n "$VIRTUAL_ENV" ]; then
+        echo -e "${YELLOW}正在退出虚拟环境...${NC}"
+        deactivate 2>/dev/null
+    fi
+
     # 停止 supervisord 和 forward 进程
     if command -v supervisorctl &> /dev/null; then
+        echo -e "${YELLOW}正在停止 forward 服务...${NC}"
         supervisorctl stop forward 2>/dev/null
         sleep 2
     fi
 
     # 杀死所有相关 Python 进程（forward.py）
-    pkill -f "python.*forward.py" 2>/dev/null
-
-    # 确保 supervisord 进程被停止
-    pkill -f "supervisord" 2>/dev/null
-    sleep 1
-
-    # 如果进程仍然存在，使用强制终止
-    if pgrep -f "supervisord" > /dev/null; then
-        echo -e "${YELLOW}尝试强制终止 supervisord 进程...${NC}"
-        pkill -9 -f "supervisord" 2>/dev/null
+    if pgrep -f "python.*forward.py" > /dev/null; then
+        echo -e "${YELLOW}正在终止 forward.py 进程...${NC}"
+        pkill -f "python.*forward.py" 2>/dev/null
+        sleep 1
+        # 如果进程仍然存在，使用强制终止
+        if pgrep -f "python.*forward.py" > /dev/null; then
+            echo -e "${YELLOW}尝试强制终止 forward.py 进程...${NC}"
+            pkill -9 -f "python.*forward.py" 2>/dev/null
+            sleep 1
+        fi
     fi
 
+    # 确保 supervisord 进程被停止
+    if pgrep -f "supervisord" > /dev/null; then
+        echo -e "${YELLOW}正在停止 supervisord...${NC}"
+
+        # 根据系统类型停止 supervisord
+        if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+            systemctl stop supervisor 2>/dev/null
+        elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+            systemctl stop supervisord 2>/dev/null
+        else
+            pkill -f "supervisord" 2>/dev/null
+        fi
+        sleep 1
+
+        # 如果进程仍然存在，使用强制终止
+        if pgrep -f "supervisord" > /dev/null; then
+            echo -e "${YELLOW}尝试强制终止 supervisord 进程...${NC}"
+            pkill -9 -f "supervisord" 2>/dev/null
+            sleep 1
+        fi
+    fi
+
+    # 清理所有 PID 文件
+    cleanup_pid_files
+
     echo -e "${YELLOW}正在删除相关文件和配置...${NC}"
+
     # 删除 forward.py
-    [ -f "$FORWARD_PY" ] && rm -f "$FORWARD_PY" && echo -e "${GREEN}已删除 forward.py${NC}"
+    if [ -f "$FORWARD_PY" ]; then
+        rm -f "$FORWARD_PY" && echo -e "${GREEN}已删除 forward.py${NC}"
+    fi
+
     # 删除日志文件
-    [ -f "$LOG_FILE" ] && rm -f "$LOG_FILE" && echo -e "${GREEN}已删除日志文件${NC}"
+    if [ -f "$LOG_FILE" ]; then
+        rm -f "$LOG_FILE" && echo -e "${GREEN}已删除日志文件${NC}"
+    fi
+
+    # 删除日志轮转的压缩日志
+    rm -f "$LOG_FILE"* 2>/dev/null && echo -e "${GREEN}已删除所有日志文件${NC}"
+
+    # 删除配置文件
+    if [ -f "$CONFIG_FILE" ]; then
+        rm -f "$CONFIG_FILE" && echo -e "${GREEN}已删除配置文件${NC}"
+    fi
+
     # 删除虚拟环境
-    [ -d "$VENV_DIR" ] && rm -rf "$VENV_DIR" && echo -e "${GREEN}已删除虚拟环境${NC}"
-    # 删除 supervisord 配置文件
-    [ -f "/etc/supervisor.d/forward.ini" ] && rm -f "/etc/supervisor.d/forward.ini" && echo -e "${GREEN}已删除 supervisord 配置文件${NC}"
+    if [ -d "$VENV_DIR" ]; then
+        rm -rf "$VENV_DIR" && echo -e "${GREEN}已删除虚拟环境${NC}"
+    fi
+
+    # 删除 supervisord 配置文件（检查多个可能的位置）
+    local supervisor_configs=(
+        "$SUPERVISOR_DIR/forward.ini"
+        "/etc/supervisor.d/forward.ini"
+        "/etc/supervisor/conf.d/forward.ini"
+        "/etc/supervisord.d/forward.ini"
+    )
+
+    for config in "${supervisor_configs[@]}"; do
+        if [ -f "$config" ]; then
+            rm -f "$config" && echo -e "${GREEN}已删除 supervisord 配置文件: $config${NC}"
+        fi
+    done
+
     # 删除日志轮转配置文件
-    [ -f "/etc/logrotate.d/forward" ] && rm -f "/etc/logrotate.d/forward" && echo -e "${GREEN}已删除日志轮转配置文件${NC}"
+    if [ -f "/etc/logrotate.d/forward" ]; then
+        rm -f "/etc/logrotate.d/forward" && echo -e "${GREEN}已删除日志轮转配置文件${NC}"
+    fi
+
     # 删除 Telegram 会话文件
-    rm -f "$SCRIPT_DIR/session_account*.session" 2>/dev/null && echo -e "${GREEN}已删除会话文件${NC}"
+    rm -f "$SCRIPT_DIR/session_account"*.session 2>/dev/null && echo -e "${GREEN}已删除会话文件${NC}"
+    rm -f "$SCRIPT_DIR/session_account"*.session-journal 2>/dev/null && echo -e "${GREEN}已删除会话日志文件${NC}"
+
+    # 删除可能的缓存文件
+    rm -rf "$SCRIPT_DIR/.telegram-cli" 2>/dev/null
+    rm -rf "$SCRIPT_DIR/__pycache__" 2>/dev/null
+    echo -e "${GREEN}已清理缓存文件${NC}"
 
     echo -e "${YELLOW}是否同时卸载 supervisor？（y/n，回车默认为 n）：${NC}"
     read uninstall_supervisor
@@ -650,8 +723,18 @@ uninstall_script() {
 
     if [ "$uninstall_supervisor" = "y" ]; then
         echo -e "${YELLOW}正在卸载 supervisor...${NC}"
-        if command -v apk &> /dev/null; then
+        if [ "$OS_TYPE" = "alpine" ]; then
             apk del supervisor 2>/dev/null && echo -e "${GREEN}已卸载 supervisor${NC}"
+        elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+            apt-get remove -y supervisor 2>/dev/null && echo -e "${GREEN}已卸载 supervisor${NC}"
+        elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+            if command -v dnf &> /dev/null; then
+                dnf remove -y supervisor 2>/dev/null && echo -e "${GREEN}已卸载 supervisor${NC}"
+            else
+                yum remove -y supervisor 2>/dev/null && echo -e "${GREEN}已卸载 supervisor${NC}"
+            fi
+        else
+            echo -e "${RED}无法确定系统类型，请手动卸载 supervisor${NC}"
         fi
     else
         echo -e "${YELLOW}保留 supervisor 安装${NC}"
@@ -661,7 +744,9 @@ uninstall_script() {
     # 删除脚本自身
     rm -f "$SELF_SCRIPT" && echo -e "${GREEN}脚本已删除！${NC}"
 
-    echo -e "${GREEN}卸载完成！程序即将退出。${NC}"
+    echo -e "${GREEN}卸载完成！${NC}"
+    echo -e "${YELLOW}备份文件已保留在 $SCRIPT_DIR/backup 目录中，如需完全清理，请手动删除该目录。${NC}"
+    echo -e "${GREEN}程序即将退出。${NC}"
     exit 0
 }
 
@@ -780,19 +865,45 @@ restore_config() {
         # 停止脚本
         stop_script
 
-        # 恢复文件
-        echo -e "${YELLOW}正在恢复配置...${NC}"
-        tar -xzf "$selected_file" -C "$SCRIPT_DIR"
+        # 创建临时目录
+        local temp_dir="/tmp/forward_restore_$$"
+        mkdir -p "$temp_dir"
+
+        # 先解压到临时目录
+        echo -e "${YELLOW}正在解压备份文件...${NC}"
+        tar -xzf "$selected_file" -C "$temp_dir"
 
         if [ $? -eq 0 ]; then
-            echo -e "${GREEN}配置已成功恢复！${NC}"
-            # 重新加载配置
-            if [ -f "$CONFIG_FILE" ]; then
+            echo -e "${YELLOW}正在恢复配置文件到项目目录...${NC}"
+
+            # 复制 forward.py 到项目目录
+            if [ -f "$temp_dir/forward.py" ]; then
+                cp "$temp_dir/forward.py" "$FORWARD_PY"
+                echo -e "${GREEN}已恢复 forward.py${NC}"
+            fi
+
+            # 复制会话文件到项目目录
+            if ls "$temp_dir"/session_account*.session &>/dev/null; then
+                cp "$temp_dir"/session_account*.session "$SCRIPT_DIR/" 2>/dev/null
+                echo -e "${GREEN}已恢复会话文件${NC}"
+            fi
+
+            # 复制配置文件到项目目录
+            if [ -f "$temp_dir/.telegram_forward.conf" ]; then
+                cp "$temp_dir/.telegram_forward.conf" "$CONFIG_FILE"
+                echo -e "${GREEN}已恢复配置设置${NC}"
+                # 重新加载配置
                 . "$CONFIG_FILE"
             fi
+
+            # 清理临时目录
+            rm -rf "$temp_dir"
+
+            echo -e "${GREEN}配置已成功恢复到项目目录！${NC}"
             return 0
         else
-            echo -e "${RED}恢复失败${NC}"
+            echo -e "${RED}解压备份文件失败${NC}"
+            rm -rf "$temp_dir"
             return 1
         fi
     else
@@ -840,16 +951,14 @@ show_menu() {
     show_supervisord_config
     echo -e "${YELLOW}----------------${NC}"
     echo "1. 安装依赖"
-    echo "2. 配置脚本"
+    echo "2. 配置管理"
     echo "3. 启动脚本"
     echo "4. 停止脚本"
     echo "5. 重启脚本"
-    echo "6. 查看配置"
-    echo "7. 查看日志（按q可退出查看日志）"
-    echo "8. 备份/恢复配置"
-    echo "9. 切换 supervisord 停止设置"
-    echo "10. 系统信息"
-    echo "11. 卸载脚本"
+    echo "6. 查看日志（按q可退出查看日志）"
+    echo "7. 切换 supervisord 停止设置"
+    echo "8. 系统信息"
+    echo "9. 卸载脚本"
     echo "0. 退出"
     echo -e "${YELLOW}请选择一个选项：${NC}"
 }
@@ -870,29 +979,42 @@ toggle_supervisord_setting() {
     echo -e "${GREEN}设置已保存，将在下次启动时自动加载${NC}"
 }
 
-# 备份/恢复菜单
-backup_restore_menu() {
-    echo -e "${YELLOW}=== 备份/恢复菜单 ===${NC}"
-    echo "1. 备份配置"
-    echo "2. 恢复配置"
-    echo "0. 返回主菜单"
-    echo -e "${YELLOW}请选择一个选项：${NC}"
+# 配置管理菜单
+config_management_menu() {
+    while true; do
+        echo -e "${YELLOW}=== 配置管理菜单 ===${NC}"
+        echo "1. 新建配置"
+        echo "2. 修改配置"
+        echo "3. 备份配置"
+        echo "4. 恢复配置"
+        echo "0. 返回主菜单"
+        echo -e "${YELLOW}请选择一个选项：${NC}"
 
-    read backup_choice
-    case $backup_choice in
-        1)
-            backup_config
-            ;;
-        2)
-            restore_config
-            ;;
-        0)
-            return
-            ;;
-        *)
-            echo -e "${RED}无效选项，请重试！${NC}"
-            ;;
-    esac
+        read config_choice
+        case $config_choice in
+            1)
+                configure_script
+                ;;
+            2)
+                view_config
+                ;;
+            3)
+                backup_config
+                ;;
+            4)
+                restore_config
+                ;;
+            0)
+                return
+                ;;
+            *)
+                echo -e "${RED}无效选项，请重试！${NC}"
+                ;;
+        esac
+
+        echo -e "${YELLOW}按 Enter 键继续...${NC}"
+        read
+    done
 }
 
 # 主循环
@@ -909,36 +1031,42 @@ while true; do
             fi
             ;;
         2)
-            configure_script
+            config_management_menu
             ;;
         3)
-            start_script
+            # 检查配置文件是否存在
+            if [ ! -f "$FORWARD_PY" ]; then
+                echo -e "${RED}错误：配置文件不存在！${NC}"
+                echo -e "${YELLOW}请先使用选项 2 进行配置管理，创建配置文件。${NC}"
+            else
+                start_script
+            fi
             ;;
         4)
             stop_script
             ;;
         5)
-            stop_script
-            if [ $? -eq 0 ]; then
-                start_script
+            # 检查配置文件是否存在
+            if [ ! -f "$FORWARD_PY" ]; then
+                echo -e "${RED}错误：配置文件不存在！${NC}"
+                echo -e "${YELLOW}请先使用选项 2 进行配置管理，创建配置文件。${NC}"
+            else
+                stop_script
+                if [ $? -eq 0 ]; then
+                    start_script
+                fi
             fi
             ;;
         6)
-            view_config
-            ;;
-        7)
             view_log
             ;;
-        8)
-            backup_restore_menu
-            ;;
-        9)
+        7)
             toggle_supervisord_setting
             ;;
-        10)
+        8)
             show_system_info
             ;;
-        11)
+        9)
             uninstall_script
             ;;
         0)
