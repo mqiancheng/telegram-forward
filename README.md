@@ -26,9 +26,7 @@
 ### 1. 下载并运行脚本
 
 > ```bash
-> curl -fsSL https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/telegram_forward.sh -o telegram_forward.sh
-> chmod +x telegram_forward.sh
-> ./telegram_forward.sh
+> curl -fsSL https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/telegram_forward.sh -o telegram_forward.sh && chmod +x telegram_forward.sh && ./telegram_forward.sh
 > ```
 
 ### 2. 使用交互式菜单
