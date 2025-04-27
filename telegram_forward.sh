@@ -21,6 +21,33 @@ check_command() {
     fi
 }
 
+# 检查脚本运行状态
+check_script_status() {
+    if pgrep -f "supervisord" > /dev/null || pgrep -f "python.*forward.py" > /dev/null; then
+        echo -e "${GREEN}脚本正在运行${NC}"
+    else
+        echo -e "${RED}脚本未运行${NC}"
+    fi
+}
+
+# 检查虚拟环境状态
+check_venv_status() {
+    if [ -d "$VENV_DIR" ]; then
+        echo -e "${GREEN}虚拟环境已创建${NC}"
+    else
+        echo -e "${RED}虚拟环境未创建${NC}"
+    fi
+}
+
+# 检查 forward.py 是否存在
+check_config_status() {
+    if [ -f "$FORWARD_PY" ]; then
+        echo -e "${GREEN}脚本已配置（forward.py 存在）${NC}"
+    else
+        echo -e "${RED}脚本未配置（forward.py 不存在）${NC}"
+    fi
+}
+
 # 安装依赖
 install_dependencies() {
     echo -e "${YELLOW}正在更新包索引...${NC}"
@@ -145,6 +172,10 @@ async def main():
 asyncio.run(main())
 EOL
     echo -e "${GREEN}forward.py 已生成！${NC}"
+
+    # 配置完成后自动启动脚本
+    echo -e "${YELLOW}正在自动启动脚本...${NC}"
+    start_script
 }
 
 # 配置 supervisord
@@ -269,6 +300,11 @@ uninstall_script() {
 # 主菜单
 while true; do
     echo -e "${YELLOW}=== Telegram 消息转发管理工具 ===${NC}"
+    echo -e "${YELLOW}--- 当前状态 ---${NC}"
+    check_script_status
+    check_venv_status
+    check_config_status
+    echo -e "${YELLOW}----------------${NC}"
     echo "1. 安装依赖"
     echo "2. 配置脚本"
     echo "3. 启动脚本"
