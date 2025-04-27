@@ -1,5 +1,16 @@
 #!/bin/bash
 
+# 检查是否通过管道执行（例如 curl ... | bash）
+if [ -p /proc/self/fd/0 ]; then
+    # 如果是通过管道执行，将脚本保存到临时文件
+    TEMP_SCRIPT=$(mktemp /tmp/telegram_forward.XXXXXX)
+    cat - > "$TEMP_SCRIPT"
+    chmod +x "$TEMP_SCRIPT"
+    # 执行临时脚本并传递参数
+    exec bash "$TEMP_SCRIPT" "$@"
+    exit 0
+fi
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
