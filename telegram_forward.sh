@@ -11,6 +11,7 @@ SCRIPT_DIR="/root"
 FORWARD_PY="$SCRIPT_DIR/forward.py"
 LOG_FILE="$SCRIPT_DIR/forward.log"
 VENV_DIR="$SCRIPT_DIR/venv"
+SELF_SCRIPT="$0" # 当前脚本路径
 
 # 检查命令是否存在
 check_command() {
@@ -213,6 +214,58 @@ view_config() {
     fi
 }
 
+# 卸载脚本
+uninstall_script() {
+    echo -e "${RED}警告：卸载脚本将删除所有相关文件和配置，包括 forward.py、日志、虚拟环境等！${NC}"
+    echo -e "${YELLOW}是否确认卸载脚本？（y/n，回车默认为 n）：${NC}"
+    read confirm_uninstall
+    # 如果用户直接按回车，设置默认值为 n
+    if [ -z "$confirm_uninstall" ]; then
+        confirm_uninstall="n"
+    fi
+
+    if [ "$confirm_uninstall" != "y" ]; then
+        echo -e "${GREEN}已取消卸载操作！${NC}"
+        return
+    fi
+
+    echo -e "${YELLOW}正在停止脚本和相关进程...${NC}"
+    # 停止 supervisord 和 forward 进程
+    if command -v supervisorctl &> /dev/null; then
+        supervisorctl stop forward 2>/dev/null
+        pkill -f supervisord 2>/dev/null
+    fi
+    # 杀死所有相关 Python 进程（forward.py）
+    pkill -f "python.*forward.py" 2>/dev/null
+
+    echo -e "${YELLOW}正在删除相关文件和配置...${NC}"
+    # 删除 forward.py
+    [ -f "$FORWARD_PY" ] && rm -f "$FORWARD_PY" && echo -e "${GREEN}已删除 forward.py${NC}"
+    # 删除日志文件
+    [ -f "$LOG_FILE" ] && rm -f "$LOG_FILE" && echo -e "${GREEN}已删除日志文件${NC}"
+    # 删除虚拟环境
+    [ -d "$VENV_DIR" ] && rm -rf "$VENV_DIR" && echo -e "${GREEN}已删除虚拟环境${NC}"
+    # 删除 supervisord 配置文件
+    [ -f "/etc/supervisor.d/forward.ini" ] && rm -f "/etc/supervisor.d/forward.ini" && echo -e "${GREEN}已删除 supervisord 配置文件${NC}"
+    # 删除日志轮转配置文件
+    [ -f "/etc/logrotate.d/forward" ] && rm -f "/etc/logrotate.d/forward" && echo -e "${GREEN}已删除日志轮转配置文件${NC}"
+    # 删除 Telegram 会话文件
+    rm -f "$SCRIPT_DIR/session_account*.session" 2>/dev/null && echo -e "${GREEN}已删除会话文件${NC}"
+
+    echo -e "${YELLOW}正在卸载相关程序...${NC}"
+    # 卸载 supervisor
+    if command -v apk &> /dev/null; then
+        apk del supervisor 2>/dev/null && echo -e "${GREEN}已卸载 supervisor${NC}"
+    fi
+
+    echo -e "${YELLOW}正在删除脚本自身...${NC}"
+    # 删除脚本自身
+    rm -f "$SELF_SCRIPT" && echo -e "${GREEN}脚本已删除！${NC}"
+
+    echo -e "${GREEN}卸载完成！程序即将退出。${NC}"
+    exit 0
+}
+
 # 主菜单
 while true; do
     echo -e "${YELLOW}=== Telegram 消息转发管理工具 ===${NC}"
@@ -223,7 +276,8 @@ while true; do
     echo "5. 重启脚本"
     echo "6. 查看配置"
     echo "7. 查看日志"
-    echo "8. 退出"
+    echo "8. 卸载脚本"
+    echo "9. 退出"
     echo -e "${YELLOW}请选择一个选项：${NC}"
     read choice
 
@@ -252,6 +306,9 @@ while true; do
             view_log
             ;;
         8)
+            uninstall_script
+            ;;
+        9)
             echo -e "${GREEN}退出程序${NC}"
             exit 0
             ;;
