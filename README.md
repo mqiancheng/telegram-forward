@@ -16,7 +16,7 @@ Telegram 消息转发管理工具
 
 安装和使用
 1. 下载脚本
-curl -fsSL https://raw.githubusercontent.com/你的用户名/telegram-forward/main/telegram_forward.sh -o telegram_forward.sh
+curl -fsSL https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/telegram_forward.sh -o telegram_forward.sh
 chmod +x telegram_forward.sh
 
 2. 运行脚本
