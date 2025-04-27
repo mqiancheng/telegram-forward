@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.0.4"
+SCRIPT_VERSION="1.0.5"
 
 # 脚本路径和文件
 SCRIPT_DIR="/root"
@@ -265,8 +265,9 @@ start_script() {
         fi
     fi
 
-    # 延迟 2 秒以确保状态更新
-    sleep 2
+    # 延迟6秒后再次检查状态
+    echo -e "${YELLOW}正在等待服务启动...${NC}"
+    sleep 6
 }
 
 # 停止脚本
@@ -290,15 +291,16 @@ stop_script() {
         rm -f /var/run/supervisord.pid 2>/dev/null
     fi
 
+    # 延迟6秒后再次检查状态
+    echo -e "${YELLOW}正在等待服务停止...${NC}"
+    sleep 6
+
     # 再次检查是否仍有进程
     if pgrep -f "supervisord" > /dev/null || pgrep -f "python.*forward.py" > /dev/null; then
         echo -e "${RED}停止脚本失败，某些进程仍在运行${NC}"
     else
         echo -e "${GREEN}脚本已停止！${NC}"
     fi
-
-    # 延迟 2 秒以确保状态更新
-    sleep 2
 }
 
 # 重启脚本
@@ -383,7 +385,7 @@ uninstall_script() {
 }
 
 # 主菜单
-while true; do
+show_menu() {
     echo -e "${YELLOW}=== Telegram 消息转发管理工具 ===${NC}"
     echo -e "${YELLOW}版本: $SCRIPT_VERSION${NC}"
     echo -e "${YELLOW}--- 当前状态 ---${NC}"
@@ -401,6 +403,11 @@ while true; do
     echo "8. 卸载脚本"
     echo "9. 退出"
     echo -e "${YELLOW}请选择一个选项：${NC}"
+}
+
+# 主循环
+while true; do
+    show_menu
     read choice
 
     case $choice in
@@ -419,7 +426,8 @@ while true; do
             stop_script
             ;;
         5)
-            restart_script
+            stop_script
+            start_script
             ;;
         6)
             view_config
