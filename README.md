@@ -1,6 +1,6 @@
 # Telegram 消息转发管理工具 🚀
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg](https://raw.githubusercontent.com/mqiancheng/telegram-forward/refs/heads/main/LICENSE)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-Alpine%20Linux-green.svg)
 
 这是一个用于管理 Telegram 消息转发的 Bash 脚本，支持多账号私聊消息实时转发到指定群组。通过交互式菜单，你可以轻松安装依赖、配置脚本、启动/停止脚本、查看日志等。
