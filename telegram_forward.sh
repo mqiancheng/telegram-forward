@@ -42,12 +42,45 @@ install_dependencies() {
 configure_script() {
     echo -e "${YELLOW}请输入大号群组的 Chat ID（例如 -4688142035）：${NC}"
     read target_chat_id
-    echo -e "${YELLOW}请输入小号的 api_id（从 my.telegram.org 获取）：${NC}"
-    read api_id
-    echo -e "${YELLOW}请输入小号的 api_hash（从 my.telegram.org 获取）：${NC}"
-    read api_hash
-    echo -e "${YELLOW}是否只转发特定用户/机器人的消息？（y/n）：${NC}"
+
+    # 初始化 accounts 数组
+    accounts=""
+    account_index=1
+
+    # 循环添加小号
+    while true; do
+        echo -e "${YELLOW}请输入小号${account_index}的 api_id（从 my.telegram.org 获取）：${NC}"
+        read api_id
+        echo -e "${YELLOW}请输入小号${account_index}的 api_hash（从 my.telegram.org 获取）：${NC}"
+        read api_hash
+
+        # 添加小号到 accounts 数组
+        if [ -z "$accounts" ]; then
+            accounts="    {\n        'api_id': '$api_id',\n        'api_hash': '$api_hash',\n        'session': 'session_account${account_index}'\n    }"
+        else
+            accounts="$accounts,\n    {\n        'api_id': '$api_id',\n        'api_hash': '$api_hash',\n        'session': 'session_account${account_index}'\n    }"
+        fi
+
+        # 询问是否继续添加小号，回车默认为 y
+        echo -e "${YELLOW}是否继续添加小号？（y/n，回车默认为 y）：${NC}"
+        read continue_adding
+        # 如果用户直接按回车，设置默认值为 y
+        if [ -z "$continue_adding" ]; then
+            continue_adding="y"
+        fi
+        if [ "$continue_adding" != "y" ]; then
+            break
+        fi
+        account_index=$((account_index + 1))
+    done
+
+    # 询问是否只转发特定用户/机器人的消息，回车默认为 y
+    echo -e "${YELLOW}是否只转发特定用户/机器人的消息？（y/n，回车默认为 y）：${NC}"
     read filter_senders
+    # 如果用户直接按回车，设置默认值为 y
+    if [ -z "$filter_senders" ]; then
+        filter_senders="y"
+    fi
     allowed_senders="[]"
     if [ "$filter_senders" = "y" ]; then
         echo -e "${YELLOW}请输入用户名（例如 @HaxBot），多个用户用空格分隔：${NC}"
@@ -69,11 +102,7 @@ target_chat_id = $target_chat_id
 
 # 每个账号的配置（api_id, api_hash, session 文件名）
 accounts = [
-    {
-        'api_id': '$api_id',
-        'api_hash': '$api_hash',
-        'session': 'session_account1'
-    },
+$accounts
 ]
 
 # 可选：只转发特定用户/机器人的消息（留空则转发所有私聊消息）
@@ -174,6 +203,16 @@ view_log() {
     tail -f $LOG_FILE
 }
 
+# 查看配置（以 nano 打开 forward.py）
+view_config() {
+    if [ -f "$FORWARD_PY" ]; then
+        nano $FORWARD_PY
+        echo -e "${GREEN}配置已保存！${NC}"
+    else
+        echo -e "${RED}forward.py 文件不存在，请先配置脚本！${NC}"
+    fi
+}
+
 # 主菜单
 while true; do
     echo -e "${YELLOW}=== Telegram 消息转发管理工具 ===${NC}"
@@ -182,8 +221,9 @@ while true; do
     echo "3. 启动脚本"
     echo "4. 停止脚本"
     echo "5. 重启脚本"
-    echo "6. 查看日志"
-    echo "7. 退出"
+    echo "6. 查看配置"
+    echo "7. 查看日志"
+    echo "8. 退出"
     echo -e "${YELLOW}请选择一个选项：${NC}"
     read choice
 
@@ -206,9 +246,12 @@ while true; do
             restart_script
             ;;
         6)
-            view_log
+            view_config
             ;;
         7)
+            view_log
+            ;;
+        8)
             echo -e "${GREEN}退出程序${NC}"
             exit 0
             ;;
