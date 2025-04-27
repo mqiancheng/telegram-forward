@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # 检查是否通过管道执行（例如 curl ... | bash）
-if [ -p /proc/self/fd/0 ]; then
+if [ -p /proc/self/fd/0 ] && [ -z "$EXECUTED_ONCE" ]; then
     # 如果是通过管道执行，将脚本保存到临时文件
+    export EXECUTED_ONCE=1
     TEMP_SCRIPT=$(mktemp /tmp/telegram_forward.XXXXXX)
     cat - > "$TEMP_SCRIPT"
     chmod +x "$TEMP_SCRIPT"
