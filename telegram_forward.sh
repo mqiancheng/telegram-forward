@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.4.1"
+SCRIPT_VERSION="1.5.0"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -133,6 +133,63 @@ check_config_status() {
         echo -e "${GREEN}脚本已配置（forward.py 存在）${NC}"
     else
         echo -e "${RED}脚本未配置（forward.py 不存在）${NC}"
+    fi
+}
+
+# 检查小号状态
+check_accounts_status() {
+    # 检查 forward.py 是否存在
+    if [ ! -f "$FORWARD_PY" ]; then
+        echo -e "${RED}小号状态：未配置${NC}"
+        return 1
+    fi
+
+    # 检查虚拟环境是否存在
+    if [ ! -d "$VENV_DIR" ]; then
+        echo -e "${RED}小号状态：虚拟环境未创建，无法检查${NC}"
+        return 1
+    fi
+
+    # 检查状态检查脚本是否存在
+    if [ ! -f "$SCRIPT_DIR/check_account_status.py" ]; then
+        echo -e "${RED}小号状态：状态检查脚本不存在${NC}"
+        return 1
+    fi
+
+    # 激活虚拟环境
+    source "$VENV_DIR/bin/activate"
+
+    # 运行状态检查脚本
+    local status_output=$(python "$SCRIPT_DIR/check_account_status.py" "$FORWARD_PY" 2>/dev/null)
+    local exit_code=$?
+
+    # 检查脚本是否成功运行
+    if [ $exit_code -ne 0 ] || [ -z "$status_output" ]; then
+        echo -e "${RED}小号状态：检查失败${NC}"
+        return 1
+    fi
+
+    # 解析状态输出
+    local error_count=0
+    local total_count=$(echo "$status_output" | grep -o '"status"' | wc -l)
+
+    if [ $total_count -eq 0 ]; then
+        echo -e "${RED}小号状态：未检测到小号${NC}"
+        return 1
+    fi
+
+    # 检查是否有错误状态
+    if echo "$status_output" | grep -q '"status":"error"\|"status":"unauthorized"'; then
+        error_count=$(echo "$status_output" | grep -o '"status":"error"\|"status":"unauthorized"' | wc -l)
+        echo -e "${RED}小号状态：异常（$error_count/$total_count 个小号需要重新授权）${NC}"
+        # 保存状态到临时文件
+        echo "$status_output" > "$SCRIPT_DIR/.account_status.json"
+        return 1
+    else
+        echo -e "${GREEN}小号状态：正常（$total_count 个小号）${NC}"
+        # 保存状态到临时文件
+        echo "$status_output" > "$SCRIPT_DIR/.account_status.json"
+        return 0
     fi
 }
 
@@ -300,6 +357,156 @@ EOL
     chmod +x "$SCRIPT_DIR/bin/stop_forward.sh"
 
     echo -e "${GREEN}启动和停止脚本已创建${NC}"
+
+    # 复制账户状态检查脚本
+    if [ -f "$SCRIPT_DIR/check_account_status.py" ]; then
+        echo -e "${YELLOW}账户状态检查脚本已存在，跳过复制...${NC}"
+    else
+        echo -e "${YELLOW}正在创建账户状态检查脚本...${NC}"
+        cat > "$SCRIPT_DIR/check_account_status.py" << EOL
+#!/usr/bin/env python3
+from telethon import TelegramClient
+import asyncio
+import sys
+import os
+import json
+
+# 检查小号状态的脚本
+# 用法: python3 check_account_status.py [forward.py路径]
+
+async def check_account(session_file, api_id, api_hash):
+    """检查账号状态，返回状态和用户信息"""
+    try:
+        # 创建客户端但不连接
+        client = TelegramClient(session_file, api_id, api_hash)
+
+        # 尝试连接
+        await client.connect()
+
+        # 检查是否已授权
+        if not await client.is_user_authorized():
+            await client.disconnect()
+            return {
+                "status": "unauthorized",
+                "message": "账号未授权，需要重新登录",
+                "session": session_file
+            }
+
+        # 获取用户信息
+        me = await client.get_me()
+
+        # 断开连接
+        await client.disconnect()
+
+        # 返回状态和用户信息
+        return {
+            "status": "ok",
+            "message": "账号状态正常",
+            "session": session_file,
+            "user_id": me.id,
+            "username": me.username,
+            "first_name": me.first_name,
+            "last_name": me.last_name,
+            "phone": me.phone
+        }
+    except Exception as e:
+        # 捕获所有异常
+        return {
+            "status": "error",
+            "message": str(e),
+            "session": session_file
+        }
+
+async def check_all_accounts(accounts):
+    """检查所有账号状态"""
+    results = []
+    for account in accounts:
+        session = account['session']
+        api_id = account['api_id']
+        api_hash = account['api_hash']
+
+        # 检查账号状态
+        result = await check_account(session, api_id, api_hash)
+        results.append(result)
+
+    return results
+
+def parse_forward_py(file_path):
+    """解析 forward.py 文件，提取账号信息"""
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read()
+
+        # 提取 accounts 部分
+        accounts_start = content.find('accounts = [')
+        accounts_end = content.find(']', accounts_start)
+
+        if accounts_start == -1 or accounts_end == -1:
+            return []
+
+        # 提取账号信息
+        accounts_str = content[accounts_start:accounts_end+1]
+
+        # 将单引号替换为双引号以便 JSON 解析
+        accounts_str = accounts_str.replace("'", '"')
+        accounts_str = accounts_str.replace("accounts = ", "")
+
+        # 解析 JSON
+        try:
+            accounts = json.loads(accounts_str)
+            return accounts
+        except json.JSONDecodeError:
+            # 如果 JSON 解析失败，使用更简单的方法
+            accounts = []
+            lines = accounts_str.strip()[1:-1].split('{')
+            for line in lines:
+                if not line.strip():
+                    continue
+                line = '{' + line
+                if line.endswith(','):
+                    line = line[:-1]
+                try:
+                    account = eval(line)
+                    accounts.append(account)
+                except:
+                    pass
+            return accounts
+    except Exception as e:
+        print(f"解析 forward.py 失败: {e}")
+        return []
+
+async def main():
+    # 检查参数
+    if len(sys.argv) < 2:
+        print("用法: python3 check_account_status.py <forward.py路径>")
+        return
+
+    forward_py_path = sys.argv[1]
+
+    # 检查文件是否存在
+    if not os.path.exists(forward_py_path):
+        print(f"错误: 文件 {forward_py_path} 不存在")
+        return
+
+    # 解析 forward.py
+    accounts = parse_forward_py(forward_py_path)
+
+    if not accounts:
+        print("错误: 无法解析账号信息")
+        return
+
+    # 检查所有账号状态
+    results = await check_all_accounts(accounts)
+
+    # 输出结果为 JSON
+    print(json.dumps(results, ensure_ascii=False))
+
+if __name__ == "__main__":
+    asyncio.run(main())
+EOL
+        chmod +x "$SCRIPT_DIR/check_account_status.py"
+        echo -e "${GREEN}账户状态检查脚本已创建${NC}"
+    fi
 
     # 创建快捷命令
     create_shortcut
@@ -938,14 +1145,16 @@ show_menu() {
     check_script_status
     check_venv_status
     check_config_status
+    check_accounts_status
     echo -e "${YELLOW}----------------${NC}"
     echo "1. 安装依赖"
     echo "2. 配置管理"
-    echo "3. 启动脚本"
-    echo "4. 停止脚本"
-    echo "5. 重启脚本"
-    echo "6. 查看日志（按q可退出查看日志）"
-    echo "7. 卸载脚本"
+    echo "3. 小号状态"
+    echo "4. 启动脚本"
+    echo "5. 停止脚本"
+    echo "6. 重启脚本"
+    echo "7. 查看日志（按q可退出查看日志）"
+    echo "8. 卸载脚本"
     echo "0. 退出"
     echo -e "${YELLOW}请选择一个选项：${NC}"
 }
@@ -984,9 +1193,286 @@ config_management_menu() {
                 echo -e "${RED}无效选项，请重试！${NC}"
                 ;;
         esac
-
-
     done
+}
+
+# 小号状态菜单
+accounts_status_menu() {
+    while true; do
+        echo -e "${YELLOW}=== 小号状态菜单 ===${NC}"
+        echo -e "${YELLOW}使用说明：输入序号并回车重新配置标红异常状态的小号${NC}"
+        echo -e "${YELLOW}对于有多个小号异常的，请输入数字加空格，例如：2 3 6${NC}"
+
+        # 检查 forward.py 是否存在
+        if [ ! -f "$FORWARD_PY" ]; then
+            echo -e "${RED}错误：配置文件不存在！${NC}"
+            echo -e "${YELLOW}请先使用选项 2 进行配置管理，创建配置文件。${NC}"
+            echo -e "${YELLOW}按 Enter 键返回主菜单...${NC}"
+            read
+            return
+        fi
+
+        # 检查状态文件是否存在
+        if [ ! -f "$SCRIPT_DIR/.account_status.json" ]; then
+            # 运行状态检查
+            check_accounts_status > /dev/null
+        fi
+
+        # 显示小号列表
+        if [ -f "$SCRIPT_DIR/.account_status.json" ]; then
+            # 激活虚拟环境
+            source "$VENV_DIR/bin/activate"
+
+            # 解析状态文件并显示小号列表
+            python3 -c '
+import json
+import sys
+
+try:
+    with open("'"$SCRIPT_DIR/.account_status.json"'", "r") as f:
+        accounts = json.load(f)
+
+    for i, account in enumerate(accounts, 1):
+        status = account.get("status", "unknown")
+        session = account.get("session", "")
+        username = account.get("username", "")
+        first_name = account.get("first_name", "")
+        phone = account.get("phone", "")
+
+        # 构建显示名称
+        display_name = ""
+        if username:
+            display_name = f"@{username}"
+        elif first_name:
+            display_name = first_name
+        elif phone:
+            display_name = phone
+        else:
+            display_name = f"小号{i}"
+
+        # 根据状态显示不同颜色
+        if status == "ok":
+            print(f"\033[32m{i}. {display_name} (正常)\033[0m")
+        else:
+            message = account.get("message", "未知错误")
+            print(f"\033[31m{i}. {display_name} (异常: {message})\033[0m")
+except Exception as e:
+    print(f"\033[31m无法解析小号状态: {e}\033[0m")
+'
+        else
+            echo -e "${RED}无法获取小号状态信息${NC}"
+        fi
+
+        echo -e "${YELLOW}----------------${NC}"
+        echo "0. 返回主菜单"
+        echo -e "${YELLOW}请输入要重新授权的小号序号（多个用空格分隔）：${NC}"
+
+        read account_choice
+
+        # 检查是否返回主菜单
+        if [ "$account_choice" = "0" ]; then
+            return
+        fi
+
+        # 处理用户输入
+        if [ -n "$account_choice" ]; then
+            # 停止脚本
+            stop_script
+
+            # 重新授权选择的小号
+            reauthorize_accounts "$account_choice"
+        fi
+    done
+}
+
+# 重新授权小号
+reauthorize_accounts() {
+    local account_indices="$1"
+
+    # 检查 forward.py 是否存在
+    if [ ! -f "$FORWARD_PY" ]; then
+        echo -e "${RED}错误：配置文件不存在！${NC}"
+        return 1
+    fi
+
+    # 检查状态文件是否存在
+    if [ ! -f "$SCRIPT_DIR/.account_status.json" ]; then
+        echo -e "${RED}错误：小号状态信息不存在！${NC}"
+        return 1
+    fi
+
+    # 激活虚拟环境
+    source "$VENV_DIR/bin/activate"
+
+    # 解析状态文件
+    local accounts_data=$(cat "$SCRIPT_DIR/.account_status.json")
+
+    # 解析 forward.py 获取 API 信息
+    local api_info=$(python3 -c '
+import json
+import sys
+import re
+
+try:
+    # 读取 forward.py
+    with open("'"$FORWARD_PY"'", "r") as f:
+        content = f.read()
+
+    # 提取 accounts 部分
+    accounts_match = re.search(r"accounts\s*=\s*\[(.*?)\]", content, re.DOTALL)
+    if not accounts_match:
+        print(json.dumps([]))
+        sys.exit(0)
+
+    accounts_str = accounts_match.group(1)
+
+    # 解析每个账号
+    accounts = []
+    for match in re.finditer(r"{[^{}]*?}", accounts_str, re.DOTALL):
+        account_str = match.group(0)
+
+        # 提取 api_id
+        api_id_match = re.search(r"[\'"]api_id[\'"]\s*:\s*[\'"]?(\d+)[\'"]?", account_str)
+        api_id = api_id_match.group(1) if api_id_match else ""
+
+        # 提取 api_hash
+        api_hash_match = re.search(r"[\'"]api_hash[\'"]\s*:\s*[\'"]([a-zA-Z0-9]+)[\'"]", account_str)
+        api_hash = api_hash_match.group(1) if api_hash_match else ""
+
+        # 提取 session
+        session_match = re.search(r"[\'"]session[\'"]\s*:\s*[\'"]([^\'\"]+)[\'"]", account_str)
+        session = session_match.group(1) if session_match else ""
+
+        if api_id and api_hash and session:
+            accounts.append({
+                "api_id": api_id,
+                "api_hash": api_hash,
+                "session": session
+            })
+
+    print(json.dumps(accounts))
+except Exception as e:
+    print(json.dumps([]))
+')
+
+    # 检查是否成功解析
+    if [ -z "$api_info" ] || [ "$api_info" = "[]" ]; then
+        echo -e "${RED}错误：无法解析 API 信息！${NC}"
+        return 1
+    fi
+
+    # 处理每个选择的小号
+    for index in $account_indices; do
+        # 检查索引是否有效
+        if ! [[ "$index" =~ ^[0-9]+$ ]]; then
+            echo -e "${RED}错误：无效的索引 '$index'${NC}"
+            continue
+        fi
+
+        # 获取对应的 API 信息
+        local account_api=$(echo "$api_info" | python3 -c '
+import json
+import sys
+
+try:
+    accounts = json.loads(sys.stdin.read())
+    index = int("'"$index"'") - 1
+
+    if 0 <= index < len(accounts):
+        print(json.dumps(accounts[index]))
+    else:
+        print("{}")
+except:
+    print("{}")
+')
+
+        # 检查是否成功获取 API 信息
+        if [ -z "$account_api" ] || [ "$account_api" = "{}" ]; then
+            echo -e "${RED}错误：无法获取小号 $index 的 API 信息！${NC}"
+            continue
+        fi
+
+        # 提取 API 信息
+        local api_id=$(echo "$account_api" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("api_id", ""))')
+        local api_hash=$(echo "$account_api" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("api_hash", ""))')
+        local session=$(echo "$account_api" | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("session", ""))')
+
+        # 检查是否成功提取
+        if [ -z "$api_id" ] || [ -z "$api_hash" ] || [ -z "$session" ]; then
+            echo -e "${RED}错误：小号 $index 的 API 信息不完整！${NC}"
+            continue
+        fi
+
+        echo -e "${YELLOW}正在重新授权小号 $index [session: $session]...${NC}"
+
+        # 删除旧的 session 文件
+        if [ -f "$SCRIPT_DIR/$session.session" ]; then
+            rm -f "$SCRIPT_DIR/$session.session"
+        fi
+
+        # 创建临时登录脚本
+        cat > "$SCRIPT_DIR/temp_login.py" << EOL
+from telethon import TelegramClient
+import asyncio
+
+async def main():
+    # 创建客户端
+    client = TelegramClient('$SCRIPT_DIR/$session', $api_id, '$api_hash')
+
+    # 连接并登录
+    await client.connect()
+
+    if not await client.is_user_authorized():
+        print("请登录您的 Telegram 账号")
+
+        # 获取手机号
+        phone = input("请输入您的手机号（包含国家代码，例如 +86）: ")
+
+        # 发送验证码
+        await client.send_code_request(phone)
+
+        # 输入验证码
+        code = input("请输入收到的验证码: ")
+
+        try:
+            # 尝试使用验证码登录
+            await client.sign_in(phone, code)
+            print("登录成功！")
+        except Exception as e:
+            # 如果需要密码（两步验证）
+            if "password" in str(e).lower():
+                password = input("请输入您的两步验证密码: ")
+                await client.sign_in(password=password)
+                print("登录成功！")
+            else:
+                print(f"登录失败: {e}")
+    else:
+        print("已经登录！")
+
+    # 获取用户信息
+    me = await client.get_me()
+    print(f"已登录为: {me.first_name} (@{me.username})")
+
+    # 断开连接
+    await client.disconnect()
+
+asyncio.run(main())
+EOL
+
+        # 运行登录脚本
+        python3 "$SCRIPT_DIR/temp_login.py"
+
+        # 删除临时登录脚本
+        rm -f "$SCRIPT_DIR/temp_login.py"
+
+        echo -e "${GREEN}小号 $index 重新授权完成！${NC}"
+    done
+
+    # 更新状态
+    check_accounts_status > /dev/null
+
+    echo -e "${GREEN}所有选择的小号已重新授权完成！${NC}"
+    return 0
 }
 
 # 主循环
@@ -1005,6 +1491,9 @@ while true; do
             config_management_menu
             ;;
         3)
+            accounts_status_menu
+            ;;
+        4)
             # 检查配置文件是否存在
             if [ ! -f "$FORWARD_PY" ]; then
                 echo -e "${RED}错误：配置文件不存在！${NC}"
@@ -1014,10 +1503,10 @@ while true; do
                 start_script
             fi
             ;;
-        4)
+        5)
             stop_script
             ;;
-        5)
+        6)
             # 检查配置文件是否存在
             if [ ! -f "$FORWARD_PY" ]; then
                 echo -e "${RED}错误：配置文件不存在！${NC}"
@@ -1030,20 +1519,18 @@ while true; do
                 fi
             fi
             ;;
-        6)
+        7)
             view_log
             ;;
-        7)
+        8)
             uninstall_script
             ;;
         0)
-            echo -e "${GREEN}退出程序${NC}"
+            echo -e "${GREEN}退出功能菜单，脚本后台运行中...${NC}"
             exit 0
             ;;
         *)
             echo -e "${RED}无效选项，请重试！${NC}"
             ;;
     esac
-
-
 done
