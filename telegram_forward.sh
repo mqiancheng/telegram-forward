@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.4.0"
+SCRIPT_VERSION="1.4.1"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -851,8 +851,17 @@ restore_config() {
     if [ "$backup_choice" -gt 0 ] && [ "$backup_choice" -lt "$i" ]; then
         local selected_file="${backup_files[$((backup_choice-1))]}"
 
-        # 停止脚本
-        stop_script
+        # 安静地停止脚本（如果正在运行）
+        if pgrep -f "python.*forward.py" > /dev/null; then
+            echo -e "${YELLOW}正在停止当前运行的脚本...${NC}"
+            # 使用安静模式停止脚本
+            if [ -f "$SCRIPT_DIR/bin/stop_forward.sh" ]; then
+                $SCRIPT_DIR/bin/stop_forward.sh > /dev/null 2>&1
+            else
+                pkill -f "python.*forward.py" > /dev/null 2>&1
+            fi
+            sleep 1
+        fi
 
         # 创建临时目录
         local temp_dir="/tmp/forward_restore_$$"
