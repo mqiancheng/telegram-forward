@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.5.0"
+SCRIPT_VERSION="1.5.1"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -472,7 +472,7 @@ def parse_forward_py(file_path):
                     pass
             return accounts
     except Exception as e:
-        print(f"解析 forward.py 失败: {e}")
+        print("解析 forward.py 失败: " + str(e))
         return []
 
 async def main():
@@ -485,7 +485,7 @@ async def main():
 
     # 检查文件是否存在
     if not os.path.exists(forward_py_path):
-        print(f"错误: 文件 {forward_py_path} 不存在")
+        print("错误: 文件 " + forward_py_path + " 不存在")
         return
 
     # 解析 forward.py
@@ -601,14 +601,14 @@ for client in clients:
         async def handler(event):
             # 实时转发消息到大号
             await client.forward_messages(target_chat_id, event.message)
-            print(f"消息已转发 (来自 {event.sender_id})")
+            print("消息已转发 (来自 " + str(event.sender_id) + ")")
     else:  # 转发所有私聊消息
         @client.on(events.NewMessage(chats=None))
         async def handler(event):
             # 确保只转发私聊消息（排除群组/频道）
             if event.is_private:
                 await client.forward_messages(target_chat_id, event.message)
-                print(f"消息已转发 (来自 {event.sender_id})")
+                print("消息已转发 (来自 " + str(event.sender_id) + ")")
 
 # 启动所有客户端
 async def main():
@@ -619,7 +619,7 @@ async def main():
             # 保持运行
             await asyncio.gather(*(client.run_until_disconnected() for client in clients))
         except Exception as e:
-            print(f"脚本异常退出: {e}")
+            print("脚本异常退出: " + str(e))
             print("将在 60 秒后重试...")
             await asyncio.sleep(60)
 
@@ -1242,22 +1242,22 @@ try:
         # 构建显示名称
         display_name = ""
         if username:
-            display_name = f"@{username}"
+            display_name = "@" + username
         elif first_name:
             display_name = first_name
         elif phone:
             display_name = phone
         else:
-            display_name = f"小号{i}"
+            display_name = "小号" + str(i)
 
         # 根据状态显示不同颜色
         if status == "ok":
-            print(f"\033[32m{i}. {display_name} (正常)\033[0m")
+            print("\033[32m" + str(i) + ". " + display_name + " (正常)\033[0m")
         else:
             message = account.get("message", "未知错误")
-            print(f"\033[31m{i}. {display_name} (异常: {message})\033[0m")
+            print("\033[31m" + str(i) + ". " + display_name + " (异常: " + message + ")\033[0m")
 except Exception as e:
-    print(f"\033[31m无法解析小号状态: {e}\033[0m")
+    print("\033[31m无法解析小号状态: " + str(e) + "\033[0m")
 '
         else
             echo -e "${RED}无法获取小号状态信息${NC}"
@@ -1411,7 +1411,7 @@ except:
         fi
 
         # 创建临时登录脚本
-        cat > "$SCRIPT_DIR/temp_login.py" << 'EOL'
+        cat > "$SCRIPT_DIR/temp_login.py" << EOL
 from telethon import TelegramClient
 import asyncio
 
@@ -1445,13 +1445,15 @@ async def main():
                 await client.sign_in(password=password)
                 print("登录成功！")
             else:
-                print(f"登录失败: {e}")
+                print("登录失败: " + str(e))
     else:
         print("已经登录！")
 
     # 获取用户信息
     me = await client.get_me()
-    print("已登录为: " + me.first_name + " (@" + (me.username or "") + ")")
+    first_name = me.first_name if me.first_name else ""
+    username = me.username if me.username else ""
+    print("已登录为: " + first_name + " (@" + username + ")")
 
     # 断开连接
     await client.disconnect()
