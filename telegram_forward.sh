@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.3.0"
+SCRIPT_VERSION="1.3.1"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -165,7 +165,23 @@ install_dependencies() {
     # 安装 Python 和 pip
     if [ "$OS_TYPE" = "alpine" ]; then
         check_command python3
-        check_command py3-pip
+        # 在 Alpine 中，py3-pip 可能不会提供独立的 pip 命令
+        if ! command -v pip &> /dev/null && ! command -v pip3 &> /dev/null; then
+            echo -e "${YELLOW}正在安装 pip...${NC}"
+            apk add py3-pip
+            # 如果仍然没有 pip 命令，创建一个符号链接
+            if ! command -v pip &> /dev/null && ! command -v pip3 &> /dev/null; then
+                if [ -f "/usr/bin/python3" ]; then
+                    echo -e "${YELLOW}创建 pip 符号链接...${NC}"
+                    ln -sf /usr/bin/python3 /usr/local/bin/pip3
+                    chmod +x /usr/local/bin/pip3
+                    echo '#!/bin/sh
+python3 -m pip "$@"' > /usr/local/bin/pip3
+                    chmod +x /usr/local/bin/pip3
+                    ln -sf /usr/local/bin/pip3 /usr/local/bin/pip
+                fi
+            fi
+        fi
     elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
         check_command python3
         check_command python3-pip
@@ -216,7 +232,48 @@ install_dependencies() {
     # 安装 supervisor
     echo -e "${YELLOW}安装 supervisord...${NC}"
     if [ "$OS_TYPE" = "alpine" ]; then
-        apk add supervisor
+        # 在 Alpine 上，supervisor 可能与 Python 3.12 不兼容
+        # 检查 Python 版本
+        python_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+        if [[ "$python_version" == "3.12" ]]; then
+            echo -e "${YELLOW}检测到 Python 3.12，supervisor 可能不兼容。尝试安装兼容版本...${NC}"
+            # 确保 pip 可用
+            if command -v pip &> /dev/null || command -v pip3 &> /dev/null; then
+                # 使用 pip 安装 supervisor
+                pip install supervisor
+                # 创建必要的目录
+                mkdir -p /etc/supervisor.d
+                # 如果 supervisord.conf 不存在，创建一个基本配置
+                if [ ! -f "$SUPERVISORD_CONF" ]; then
+                    echo -e "${YELLOW}创建 supervisord 配置文件...${NC}"
+                    cat > $SUPERVISORD_CONF << EOL
+[unix_http_server]
+file=/var/run/supervisor.sock
+chmod=0700
+
+[supervisord]
+logfile=/var/log/supervisord.log
+pidfile=/var/run/supervisord.pid
+childlogdir=/var/log
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
+[supervisorctl]
+serverurl=unix:///var/run/supervisor.sock
+
+[include]
+files = /etc/supervisor.d/*.ini
+EOL
+                fi
+            else
+                echo -e "${RED}无法安装 supervisor，pip 不可用${NC}"
+                return 1
+            fi
+        else
+            # Python 版本不是 3.12，使用包管理器安装
+            apk add supervisor
+        fi
     elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
         apt-get install -y supervisor
     elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
@@ -436,21 +493,41 @@ start_script() {
     if ! pgrep -f "supervisord" > /dev/null; then
         echo -e "${YELLOW}正在启动 supervisord...${NC}"
 
+        # 检查 Python 版本，如果是 3.12 且在 Alpine 上，可能需要特殊处理
+        if [ "$OS_TYPE" = "alpine" ]; then
+            python_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+            if [[ "$python_version" == "3.12" ]]; then
+                # 使用 pip 安装的 supervisor
+                if command -v supervisord &> /dev/null; then
+                    supervisord -c $SUPERVISORD_CONF &> /dev/null
+                elif [ -f "$VENV_DIR/bin/supervisord" ]; then
+                    $VENV_DIR/bin/supervisord -c $SUPERVISORD_CONF &> /dev/null
+                else
+                    echo -e "${RED}找不到 supervisord 命令${NC}"
+                    return 1
+                fi
+            else
+                # 使用包管理器安装的 supervisor
+                supervisord -c $SUPERVISORD_CONF &> /dev/null
+            fi
         # 根据系统类型启动 supervisord
-        if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+        elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
             systemctl start supervisor
-            sleep 2
         elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
             systemctl start supervisord
-            sleep 2
         else
             supervisord -c $SUPERVISORD_CONF &> /dev/null
-            sleep 2
         fi
+
+        sleep 2
 
         # 检查 supervisord 是否成功启动
         if ! pgrep -f "supervisord" > /dev/null; then
             echo -e "${RED}supervisord 启动失败，请检查配置${NC}"
+            echo -e "${YELLOW}尝试查看日志获取更多信息...${NC}"
+            if [ -f "/var/log/supervisord.log" ]; then
+                tail -n 20 /var/log/supervisord.log
+            fi
             return 1
         fi
     fi
