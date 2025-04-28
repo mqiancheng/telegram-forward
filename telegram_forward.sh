@@ -1411,7 +1411,7 @@ except:
         fi
 
         # 创建临时登录脚本
-        cat > "$SCRIPT_DIR/temp_login.py" << EOL
+        cat > "$SCRIPT_DIR/temp_login.py" << 'EOL'
 from telethon import TelegramClient
 import asyncio
 
