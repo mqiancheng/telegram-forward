@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.3.1"
+SCRIPT_VERSION="1.3.2"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -92,8 +92,21 @@ check_script_status() {
     local retry_delay=2
     local status="未知"
 
+    # 加载配置
+    if [ -f "$SCRIPT_DIR/.forward_config" ]; then
+        source "$SCRIPT_DIR/.forward_config"
+    fi
+
     for ((i=1; i<=$max_retries; i++)); do
-        if pgrep -f "supervisord" > /dev/null; then
+        # 检查 PID 文件（替代脚本方式）
+        if [ -f "$SCRIPT_DIR/forward.pid" ]; then
+            pid=$(cat "$SCRIPT_DIR/forward.pid")
+            if ps -p $pid > /dev/null; then
+                status="运行中"
+                break
+            fi
+        # 检查 supervisor 方式
+        elif [ "$USE_SUPERVISOR" != "false" ] && pgrep -f "supervisord" > /dev/null; then
             if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
                 status="运行中"
                 break
@@ -101,6 +114,7 @@ check_script_status() {
                 status="已停止"
                 break
             fi
+        # 直接检查 Python 进程
         elif pgrep -f "python.*forward.py" > /dev/null; then
             status="运行中"
             break
@@ -120,6 +134,16 @@ check_script_status() {
 
 # 检查 supervisord 运行状态
 check_supervisord_status() {
+    # 加载配置
+    if [ -f "$SCRIPT_DIR/.forward_config" ]; then
+        source "$SCRIPT_DIR/.forward_config"
+    fi
+
+    # 如果不使用 supervisor，不显示状态
+    if [ "$USE_SUPERVISOR" = "false" ]; then
+        return
+    fi
+
     if pgrep -f "supervisord" > /dev/null; then
         echo -e "${GREEN}supervisord 正在运行${NC}"
     else
@@ -231,61 +255,72 @@ python3 -m pip "$@"' > /usr/local/bin/pip3
 
     # 安装 supervisor
     echo -e "${YELLOW}安装 supervisord...${NC}"
-    if [ "$OS_TYPE" = "alpine" ]; then
-        # 在 Alpine 上，supervisor 可能与 Python 3.12 不兼容
-        # 检查 Python 版本
-        python_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-        if [[ "$python_version" == "3.12" ]]; then
-            echo -e "${YELLOW}检测到 Python 3.12，supervisor 可能不兼容。尝试安装兼容版本...${NC}"
-            # 确保 pip 可用
-            if command -v pip &> /dev/null || command -v pip3 &> /dev/null; then
-                # 使用 pip 安装 supervisor
-                pip install supervisor
-                # 创建必要的目录
-                mkdir -p /etc/supervisor.d
-                # 如果 supervisord.conf 不存在，创建一个基本配置
-                if [ ! -f "$SUPERVISORD_CONF" ]; then
-                    echo -e "${YELLOW}创建 supervisord 配置文件...${NC}"
-                    cat > $SUPERVISORD_CONF << EOL
-[unix_http_server]
-file=/var/run/supervisor.sock
-chmod=0700
 
-[supervisord]
-logfile=/var/log/supervisord.log
-pidfile=/var/run/supervisord.pid
-childlogdir=/var/log
+    # 检查 Python 版本
+    python_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
 
-[rpcinterface:supervisor]
-supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+    # 如果是 Python 3.12，使用替代方案
+    if [[ "$python_version" == "3.12" ]]; then
+        echo -e "${YELLOW}检测到 Python 3.12，supervisor 可能不兼容。使用替代方案...${NC}"
 
-[supervisorctl]
-serverurl=unix:///var/run/supervisor.sock
-
-[include]
-files = /etc/supervisor.d/*.ini
+        # 创建一个简单的启动脚本，不依赖 supervisor
+        mkdir -p "$SCRIPT_DIR/bin"
+        cat > "$SCRIPT_DIR/bin/run_forward.sh" << EOL
+#!/bin/sh
+# 自动生成的启动脚本，用于替代 supervisor
+cd "$SCRIPT_DIR"
+source "$VENV_DIR/bin/activate"
+python "$FORWARD_PY" >> "$LOG_FILE" 2>&1 &
+echo \$! > "$SCRIPT_DIR/forward.pid"
+echo "转发脚本已启动，PID: \$(cat "$SCRIPT_DIR/forward.pid")"
 EOL
-                fi
+        chmod +x "$SCRIPT_DIR/bin/run_forward.sh"
+
+        # 创建一个停止脚本
+        cat > "$SCRIPT_DIR/bin/stop_forward.sh" << EOL
+#!/bin/sh
+# 自动生成的停止脚本，用于替代 supervisor
+if [ -f "$SCRIPT_DIR/forward.pid" ]; then
+    pid=\$(cat "$SCRIPT_DIR/forward.pid")
+    if ps -p \$pid > /dev/null; then
+        kill \$pid
+        echo "已停止转发脚本，PID: \$pid"
+    else
+        echo "转发脚本未运行"
+    fi
+    rm -f "$SCRIPT_DIR/forward.pid"
+else
+    echo "找不到 PID 文件，尝试查找并终止进程..."
+    pkill -f "python.*forward.py"
+fi
+EOL
+        chmod +x "$SCRIPT_DIR/bin/stop_forward.sh"
+
+        echo -e "${GREEN}已创建替代脚本，不使用 supervisor${NC}"
+        # 设置一个标志，表示不使用 supervisor
+        USE_SUPERVISOR=false
+    else
+        # Python 版本兼容，使用正常的 supervisor
+        USE_SUPERVISOR=true
+
+        if [ "$OS_TYPE" = "alpine" ]; then
+            apk add supervisor
+        elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+            apt-get install -y supervisor
+        elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+            if command -v dnf &> /dev/null; then
+                dnf install -y supervisor
             else
-                echo -e "${RED}无法安装 supervisor，pip 不可用${NC}"
-                return 1
+                yum install -y supervisor
             fi
         else
-            # Python 版本不是 3.12，使用包管理器安装
-            apk add supervisor
+            echo -e "${RED}无法确定系统类型，请手动安装 supervisor${NC}"
+            return 1
         fi
-    elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
-        apt-get install -y supervisor
-    elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
-        if command -v dnf &> /dev/null; then
-            dnf install -y supervisor
-        else
-            yum install -y supervisor
-        fi
-    else
-        echo -e "${RED}无法确定系统类型，请手动安装 supervisor${NC}"
-        return 1
     fi
+
+    # 保存 USE_SUPERVISOR 设置到配置文件
+    echo "USE_SUPERVISOR=$USE_SUPERVISOR" > "$SCRIPT_DIR/.forward_config"
 
     # 确保 supervisor 服务启动
     if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
@@ -421,6 +456,17 @@ EOL
 
 # 配置 supervisord
 configure_supervisord() {
+    # 加载配置
+    if [ -f "$SCRIPT_DIR/.forward_config" ]; then
+        source "$SCRIPT_DIR/.forward_config"
+    fi
+
+    # 如果不使用 supervisor，跳过配置
+    if [ "$USE_SUPERVISOR" = "false" ]; then
+        echo -e "${YELLOW}使用替代脚本，跳过 supervisord 配置${NC}"
+        return 0
+    fi
+
     # 创建 supervisor 配置目录
     mkdir -p $SUPERVISOR_DIR
 
@@ -443,8 +489,8 @@ EOL
 
         # 重新加载 supervisor 配置
         if command -v supervisorctl &> /dev/null; then
-            supervisorctl reread
-            supervisorctl update
+            supervisorctl reread 2>/dev/null || true
+            supervisorctl update 2>/dev/null || true
         fi
     else
         echo -e "${RED}supervisord 配置失败！${NC}"
@@ -474,6 +520,11 @@ EOL
 start_script() {
     echo -e "${YELLOW}正在启动服务...${NC}"
 
+    # 加载配置
+    if [ -f "$SCRIPT_DIR/.forward_config" ]; then
+        source "$SCRIPT_DIR/.forward_config"
+    fi
+
     # 检查 forward.py 是否存在
     if [ ! -f "$FORWARD_PY" ]; then
         echo -e "${RED}forward.py 文件不存在，请先配置脚本！${NC}"
@@ -489,68 +540,78 @@ start_script() {
     # 清理残留进程和状态文件
     cleanup_processes
 
-    # 启动 supervisord（如果未运行）
-    if ! pgrep -f "supervisord" > /dev/null; then
-        echo -e "${YELLOW}正在启动 supervisord...${NC}"
+    # 根据配置决定使用哪种方式启动脚本
+    if [ "$USE_SUPERVISOR" = "false" ]; then
+        # 使用替代脚本启动
+        echo -e "${YELLOW}使用替代脚本启动...${NC}"
+        if [ -f "$SCRIPT_DIR/bin/run_forward.sh" ]; then
+            $SCRIPT_DIR/bin/run_forward.sh
+            sleep 2
 
-        # 检查 Python 版本，如果是 3.12 且在 Alpine 上，可能需要特殊处理
-        if [ "$OS_TYPE" = "alpine" ]; then
-            python_version=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-            if [[ "$python_version" == "3.12" ]]; then
-                # 使用 pip 安装的 supervisor
-                if command -v supervisord &> /dev/null; then
-                    supervisord -c $SUPERVISORD_CONF &> /dev/null
-                elif [ -f "$VENV_DIR/bin/supervisord" ]; then
-                    $VENV_DIR/bin/supervisord -c $SUPERVISORD_CONF &> /dev/null
-                else
-                    echo -e "${RED}找不到 supervisord 命令${NC}"
-                    return 1
-                fi
+            # 检查脚本是否成功启动
+            if [ -f "$SCRIPT_DIR/forward.pid" ] && ps -p $(cat "$SCRIPT_DIR/forward.pid") > /dev/null; then
+                echo -e "${GREEN}脚本已成功启动！${NC}"
             else
-                # 使用包管理器安装的 supervisor
-                supervisord -c $SUPERVISORD_CONF &> /dev/null
+                echo -e "${RED}脚本启动失败，请检查日志${NC}"
+                echo -e "${YELLOW}可能的原因：${NC}"
+                echo -e "1. Telegram API 凭证错误"
+                echo -e "2. 网络连接问题"
+                echo -e "3. Python 依赖问题"
+                echo -e "${YELLOW}请使用选项 6 查看日志以获取详细错误信息${NC}"
+                return 1
             fi
-        # 根据系统类型启动 supervisord
-        elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
-            systemctl start supervisor
-        elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
-            systemctl start supervisord
         else
-            supervisord -c $SUPERVISORD_CONF &> /dev/null
-        fi
-
-        sleep 2
-
-        # 检查 supervisord 是否成功启动
-        if ! pgrep -f "supervisord" > /dev/null; then
-            echo -e "${RED}supervisord 启动失败，请检查配置${NC}"
-            echo -e "${YELLOW}尝试查看日志获取更多信息...${NC}"
-            if [ -f "/var/log/supervisord.log" ]; then
-                tail -n 20 /var/log/supervisord.log
-            fi
-            return 1
-        fi
-    fi
-
-    # 启动 forward 任务
-    echo -e "${YELLOW}正在启动转发脚本...${NC}"
-    if ! supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
-        supervisorctl start forward &> /dev/null
-        sleep 3  # 等待启动完成
-
-        if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
-            echo -e "${GREEN}脚本已成功启动！${NC}"
-        else
-            echo -e "${RED}脚本启动失败，请检查日志${NC}"
-            echo -e "${YELLOW}可能的原因：${NC}"
-            echo -e "1. Telegram API 凭证错误"
-            echo -e "2. 网络连接问题"
-            echo -e "3. Python 依赖问题"
-            echo -e "${YELLOW}请使用选项 7 查看日志以获取详细错误信息${NC}"
+            echo -e "${RED}找不到启动脚本，请重新安装依赖${NC}"
             return 1
         fi
     else
-        echo -e "${YELLOW}脚本已在运行中${NC}"
+        # 使用 supervisor 启动
+        # 启动 supervisord（如果未运行）
+        if ! pgrep -f "supervisord" > /dev/null; then
+            echo -e "${YELLOW}正在启动 supervisord...${NC}"
+
+            # 根据系统类型启动 supervisord
+            if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+                systemctl start supervisor
+            elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+                systemctl start supervisord
+            else
+                supervisord -c $SUPERVISORD_CONF &> /dev/null
+            fi
+
+            sleep 2
+
+            # 检查 supervisord 是否成功启动
+            if ! pgrep -f "supervisord" > /dev/null; then
+                echo -e "${RED}supervisord 启动失败，请检查配置${NC}"
+                echo -e "${YELLOW}尝试查看日志获取更多信息...${NC}"
+                if [ -f "/var/log/supervisord.log" ]; then
+                    tail -n 20 /var/log/supervisord.log
+                fi
+                return 1
+            fi
+        fi
+
+        # 启动 forward 任务
+        echo -e "${YELLOW}正在启动转发脚本...${NC}"
+        if ! supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
+            supervisorctl start forward &> /dev/null
+            sleep 3  # 等待启动完成
+
+            if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
+                echo -e "${GREEN}脚本已成功启动！${NC}"
+            else
+                echo -e "${RED}脚本启动失败，请检查日志${NC}"
+                echo -e "${YELLOW}可能的原因：${NC}"
+                echo -e "1. Telegram API 凭证错误"
+                echo -e "2. 网络连接问题"
+                echo -e "3. Python 依赖问题"
+                echo -e "${YELLOW}请使用选项 6 查看日志以获取详细错误信息${NC}"
+                return 1
+            fi
+        else
+            echo -e "${YELLOW}脚本已在运行中${NC}"
+        fi
     fi
 
     return 0
@@ -560,22 +621,51 @@ start_script() {
 stop_script() {
     echo -e "${YELLOW}正在停止服务...${NC}"
 
-    # 检查 supervisorctl 命令是否可用
-    if ! command -v supervisorctl &> /dev/null; then
-        echo -e "${RED}supervisorctl 命令不可用，请确保 supervisor 已安装${NC}"
-        # 尝试直接杀死进程
-        pkill -f "python.*forward.py" 2>/dev/null
-        echo -e "${YELLOW}已尝试直接终止 forward.py 进程${NC}"
-        return 1
+    # 加载配置
+    if [ -f "$SCRIPT_DIR/.forward_config" ]; then
+        source "$SCRIPT_DIR/.forward_config"
     fi
 
-    # 停止 forward 任务
-    if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
-        echo -e "${YELLOW}正在停止转发脚本...${NC}"
-        supervisorctl stop forward &> /dev/null
-        sleep 2
+    # 根据配置决定使用哪种方式停止脚本
+    if [ "$USE_SUPERVISOR" = "false" ]; then
+        # 使用替代脚本停止
+        echo -e "${YELLOW}使用替代脚本停止...${NC}"
+        if [ -f "$SCRIPT_DIR/bin/stop_forward.sh" ]; then
+            $SCRIPT_DIR/bin/stop_forward.sh
+        else
+            echo -e "${YELLOW}找不到停止脚本，尝试直接终止进程...${NC}"
+            pkill -f "python.*forward.py" 2>/dev/null
+        fi
     else
-        echo -e "${YELLOW}转发脚本未在 supervisor 中运行${NC}"
+        # 使用 supervisor 停止
+        # 检查 supervisorctl 命令是否可用
+        if ! command -v supervisorctl &> /dev/null; then
+            echo -e "${RED}supervisorctl 命令不可用，尝试直接终止进程${NC}"
+            pkill -f "python.*forward.py" 2>/dev/null
+        else
+            # 停止 forward 任务
+            if supervisorctl status forward 2>/dev/null | grep -q "RUNNING"; then
+                echo -e "${YELLOW}正在停止转发脚本...${NC}"
+                supervisorctl stop forward &> /dev/null
+                sleep 2
+            else
+                echo -e "${YELLOW}转发脚本未在 supervisor 中运行${NC}"
+            fi
+
+            # 停止 supervisord
+            echo -e "${YELLOW}正在停止 supervisord...${NC}"
+
+            # 根据系统类型停止 supervisord
+            if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
+                systemctl stop supervisor 2>/dev/null
+            elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
+                systemctl stop supervisord 2>/dev/null
+            else
+                pkill -f "supervisord" 2>/dev/null
+            fi
+
+            sleep 1
+        fi
     fi
 
     # 清理可能残留的进程
@@ -595,46 +685,6 @@ stop_script() {
             echo -e "${RED}无法停止转发脚本，请手动检查进程${NC}"
             return 1
         fi
-    fi
-
-    # 保存当前 supervisord 停止设置到配置文件
-    save_config
-
-    # 根据配置决定是否停止 supervisord
-    if [ "$STOP_SUPERVISORD_DEFAULT" = true ]; then
-        echo -e "${YELLOW}正在停止 supervisord...${NC}"
-
-        # 根据系统类型停止 supervisord
-        if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
-            systemctl stop supervisor
-            sleep 1
-        elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
-            systemctl stop supervisord
-            sleep 1
-        else
-            pkill -f "supervisord" 2>/dev/null
-            sleep 1
-        fi
-
-        # 如果进程仍然存在，使用强制终止
-        if pgrep -f "supervisord" > /dev/null; then
-            echo -e "${YELLOW}尝试强制终止 supervisord 进程...${NC}"
-            pkill -9 -f "supervisord" 2>/dev/null
-            sleep 1
-        fi
-
-        # 清理 PID 文件
-        cleanup_pid_files
-
-        # 验证 supervisord 停止状态
-        if ! pgrep -f "supervisord" > /dev/null; then
-            echo -e "${GREEN}supervisord 已成功停止！${NC}"
-        else
-            echo -e "${RED}supervisord 停止失败，请手动停止${NC}"
-            return 1
-        fi
-    else
-        echo -e "${YELLOW}根据配置，保留 supervisord 进程运行${NC}"
     fi
 
     return 0
@@ -1025,7 +1075,6 @@ show_menu() {
     check_supervisord_status
     check_venv_status
     check_config_status
-    show_supervisord_config
     echo -e "${YELLOW}----------------${NC}"
     echo "1. 安装依赖"
     echo "2. 配置管理"
@@ -1033,9 +1082,7 @@ show_menu() {
     echo "4. 停止脚本"
     echo "5. 重启脚本"
     echo "6. 查看日志（按q可退出查看日志）"
-    echo "7. 切换 supervisord 停止设置"
-    echo "8. 系统信息"
-    echo "9. 卸载脚本"
+    echo "7. 卸载脚本"
     echo "0. 退出"
     echo -e "${YELLOW}请选择一个选项：${NC}"
 }
@@ -1138,12 +1185,6 @@ while true; do
             view_log
             ;;
         7)
-            toggle_supervisord_setting
-            ;;
-        8)
-            show_system_info
-            ;;
-        9)
             uninstall_script
             ;;
         0)
