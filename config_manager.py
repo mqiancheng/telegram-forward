@@ -10,6 +10,7 @@ import shutil
 import tarfile
 import tempfile
 import glob
+import subprocess
 from datetime import datetime
 from telethon import TelegramClient
 
@@ -18,6 +19,55 @@ RED = '\033[0;31m'
 GREEN = '\033[0;32m'
 YELLOW = '\033[1;33m'
 NC = '\033[0m'  # No Color
+
+# 启动和停止脚本函数
+def stop_script(script_dir):
+    """停止转发脚本"""
+    print_colored("正在停止服务...", YELLOW)
+
+    # 使用脚本停止
+    stop_script_path = os.path.join(script_dir, "bin", "stop_forward.sh")
+    if os.path.exists(stop_script_path):
+        subprocess.run([stop_script_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print_colored("转发脚本已停止！", GREEN)
+        return True
+    else:
+        print_colored("找不到停止脚本，尝试直接终止进程...", YELLOW)
+        subprocess.run(["pkill", "-f", "python.*forward.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        # 验证 forward.py 停止状态
+        try:
+            result = subprocess.run(["pgrep", "-f", "python.*forward.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode != 0:
+                print_colored("转发脚本已成功停止！", GREEN)
+                return True
+            else:
+                print_colored("转发脚本停止失败，尝试强制终止...", RED)
+                subprocess.run(["pkill", "-9", "-f", "python.*forward.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                return True
+        except:
+            print_colored("检查进程状态时出错", RED)
+            return False
+
+def start_script(script_dir):
+    """启动转发脚本"""
+    print_colored("正在启动服务...", YELLOW)
+
+    # 使用脚本启动
+    start_script_path = os.path.join(script_dir, "bin", "run_forward.sh")
+    if os.path.exists(start_script_path):
+        subprocess.run([start_script_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        print_colored("转发脚本已启动！", GREEN)
+        return True
+    else:
+        print_colored("找不到启动脚本，无法启动服务", RED)
+        return False
+
+def restart_script(script_dir):
+    """重启转发脚本"""
+    if stop_script(script_dir):
+        return start_script(script_dir)
+    return False
 
 def print_colored(text, color):
     """打印彩色文本"""
@@ -464,7 +514,12 @@ async def show_config_menu(script_dir, backup_dir):
             choice = int(input().strip())
 
             if choice == 1:
-                await create_new_config(script_dir)
+                success = await create_new_config(script_dir)
+                if success:
+                    # 询问是否重启脚本
+                    restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
+                    if restart == "" or restart == "y":
+                        restart_script(script_dir)
             elif choice == 2:
                 # 打开编辑器修改配置
                 forward_py_path = os.path.join(script_dir, "forward.py")
@@ -475,12 +530,24 @@ async def show_config_menu(script_dir, backup_dir):
                         editor = os.environ.get('EDITOR', 'nano')
                         os.system(f"{editor} {forward_py_path}")
                     print_colored("配置已保存！", GREEN)
+
+                    # 询问是否重启脚本
+                    restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
+                    if restart == "" or restart == "y":
+                        restart_script(script_dir)
                 else:
                     print_colored("forward.py 文件不存在，请先创建配置", RED)
             elif choice == 3:
-                backup_config(script_dir, backup_dir)
+                success = backup_config(script_dir, backup_dir)
+                if success:
+                    print_colored("备份已完成！", GREEN)
             elif choice == 4:
-                restore_config(script_dir, backup_dir)
+                success = restore_config(script_dir, backup_dir)
+                if success:
+                    # 询问是否重启脚本
+                    restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
+                    if restart == "" or restart == "y":
+                        restart_script(script_dir)
             elif choice == 5:
                 manage_backups(backup_dir)
             elif choice == 0:
@@ -494,12 +561,62 @@ async def main():
     parser = argparse.ArgumentParser(description='Telegram 配置管理工具')
     parser.add_argument('--script-dir', help='脚本目录路径', default=get_script_dir())
     parser.add_argument('--backup-dir', help='备份目录路径', default='/home/backup-TGfw')
+    parser.add_argument('--backup', action='store_true', help='备份配置')
+    parser.add_argument('--restore', action='store_true', help='恢复配置')
+    parser.add_argument('--manage-backups', action='store_true', help='管理备份文件')
+    parser.add_argument('--create-config', action='store_true', help='创建新配置')
+    parser.add_argument('--edit-config', action='store_true', help='编辑配置')
     args = parser.parse_args()
 
     script_dir = args.script_dir
     backup_dir = args.backup_dir
 
+    # 处理直接命令
+    if args.backup:
+        success = backup_config(script_dir, backup_dir)
+        return 0 if success else 1
+    elif args.restore:
+        success = restore_config(script_dir, backup_dir)
+        if success:
+            # 询问是否重启脚本
+            restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
+            if restart == "" or restart == "y":
+                restart_script(script_dir)
+        return 0 if success else 1
+    elif args.manage_backups:
+        success = manage_backups(backup_dir)
+        return 0 if success else 1
+    elif args.create_config:
+        success = await create_new_config(script_dir)
+        if success:
+            # 询问是否重启脚本
+            restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
+            if restart == "" or restart == "y":
+                restart_script(script_dir)
+        return 0 if success else 1
+    elif args.edit_config:
+        forward_py_path = os.path.join(script_dir, "forward.py")
+        if os.path.exists(forward_py_path):
+            if os.name == 'nt':  # Windows
+                os.system(f"notepad {forward_py_path}")
+            else:  # Linux/Mac
+                editor = os.environ.get('EDITOR', 'nano')
+                os.system(f"{editor} {forward_py_path}")
+            print_colored("配置已保存！", GREEN)
+
+            # 询问是否重启脚本
+            restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
+            if restart == "" or restart == "y":
+                restart_script(script_dir)
+            return 0
+        else:
+            print_colored("forward.py 文件不存在，请先创建配置", RED)
+            return 1
+
+    # 如果没有指定直接命令，显示配置菜单
     await show_config_menu(script_dir, backup_dir)
+    return 0
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    sys.exit(asyncio.run(main()))

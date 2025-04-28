@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.5.6"
+SCRIPT_VERSION="1.7.0"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -294,191 +294,48 @@ EOL
     return 0
 }
 
-# 配置 forward.py 脚本
+# 配置 forward.py 脚本（调用配置管理工具）
 configure_script() {
     # 停止任何可能正在运行的脚本
     stop_script > /dev/null 2>&1
 
-    echo -e "${YELLOW}=== 配置 Telegram 转发脚本 ===${NC}"
-    echo -e "${YELLOW}第一步：配置大号群组${NC}"
-    echo -e "${YELLOW}请输入大号群组/个人的 Chat ID（例如 -4688142035）：${NC}"
-    read target_chat_id
-
-    # 初始化 accounts 数组
-    accounts=()
-    account_index=1
-
-    echo -e "${YELLOW}=== 第二步：配置小号 ===${NC}"
-
-    # 循环添加小号
-    while true; do
-        echo -e "${YELLOW}正在配置小号 ${account_index}${NC}"
-        echo -e "${YELLOW}请输入小号${account_index}的 api_id（从 my.telegram.org 获取）：${NC}"
-        read api_id
-        echo -e "${YELLOW}请输入小号${account_index}的 api_hash（从 my.telegram.org 获取）：${NC}"
-        read api_hash
-
-        # 创建会话文件目录（如果不存在）
-        session_name="session_account${account_index}"
-
-        # 添加小号到 accounts 数组（使用正确的换行格式）
-        account_entry="    {
-        'api_id': '$api_id',
-        'api_hash': '$api_hash',
-        'session': '$session_name'
-    }"
-        accounts+=("$account_entry")
-
-        # 询问是否继续添加小号，回车默认为 n
-        echo -e "${YELLOW}是否继续添加小号？（y/n，回车默认为 n）：${NC}"
-        read continue_adding
-        # 如果用户直接按回车，设置默认值为 n
-        if [ -z "$continue_adding" ]; then
-            continue_adding="n"
-        fi
-        if [ "$continue_adding" != "y" ]; then
-            break
-        fi
-        account_index=$((account_index + 1))
-    done
-
-    # 将 accounts 数组转换为字符串，添加逗号和换行
-    IFS=","
-    accounts_str=$(echo "${accounts[*]}")
-    unset IFS
-
-    echo -e "${YELLOW}=== 第三步：配置转发规则 ===${NC}"
-
-    # 询问是否只转发特定用户/机器人的消息，回车默认为 y
-    echo -e "${YELLOW}是否只转发特定用户/机器人的消息？（y/n，回车默认为 y）：${NC}"
-    read filter_senders
-    # 如果用户直接按回车，设置默认值为 y
-    if [ -z "$filter_senders" ]; then
-        filter_senders="y"
+    # 检查 config_manager.py 是否存在
+    if [ ! -f "$SCRIPT_DIR/config_manager.py" ]; then
+        echo -e "${YELLOW}正在下载配置管理工具...${NC}"
+        curl -fsSL https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/config_manager.py -o "$SCRIPT_DIR/config_manager.py"
+        chmod +x "$SCRIPT_DIR/config_manager.py"
     fi
-    allowed_senders="[]"
-    if [ "$filter_senders" = "y" ]; then
-        echo -e "${YELLOW}请输入用户名（例如 @HaxBot），多个用户用空格分隔：${NC}"
-        read -a senders
-        allowed_senders="["
-        for sender in "${senders[@]}"; do
-            allowed_senders="$allowed_senders'$sender', "
-        done
-        allowed_senders="${allowed_senders%, }]"
-    fi
-
-    # 创建 forward.py
-    cat > $FORWARD_PY << 'EOPY'
-from telethon import TelegramClient, events
-import asyncio
-
-# 大号的 Chat ID（消息的目标）
-target_chat_id = TARGET_CHAT_ID
-
-# 每个账号的配置（api_id, api_hash, session 文件名）
-accounts = [
-ACCOUNTS_STR
-]
-
-# 可选：只转发特定用户/机器人的消息（留空则转发所有私聊消息）
-allowed_senders = ALLOWED_SENDERS
-
-# 创建所有账号的客户端
-clients = [TelegramClient(acc['session'], acc['api_id'], acc['api_hash']) for acc in accounts]
-
-# 为每个客户端设置消息监听
-for client in clients:
-    if allowed_senders:  # 如果指定了消息来源
-        @client.on(events.NewMessage(from_users=allowed_senders, chats=None))
-        async def handler(event):
-            # 实时转发消息到大号
-            await client.forward_messages(target_chat_id, event.message)
-            print(f"消息已转发 (来自 {event.sender_id})")
-    else:  # 转发所有私聊消息
-        @client.on(events.NewMessage(chats=None))
-        async def handler(event):
-            # 确保只转发私聊消息（排除群组/频道）
-            if event.is_private:
-                await client.forward_messages(target_chat_id, event.message)
-                print(f"消息已转发 (来自 {event.sender_id})")
-
-# 启动所有客户端
-async def main():
-    while True:
-        try:
-            for client in clients:
-                await client.start()
-            # 保持运行
-            await asyncio.gather(*(client.run_until_disconnected() for client in clients))
-        except Exception as e:
-            print(f"脚本异常退出: {e}")
-            print("将在 60 秒后重试...")
-            await asyncio.sleep(60)
-
-# 运行主程序
-asyncio.run(main())
-EOPY
-    # 替换模板中的变量
-    sed -i "s|TARGET_CHAT_ID|$target_chat_id|g" "$FORWARD_PY"
-    sed -i "s|ACCOUNTS_STR|$accounts_str|g" "$FORWARD_PY"
-    # 使用不同的分隔符避免与内容冲突
-    sed -i "s~ALLOWED_SENDERS~$allowed_senders~g" "$FORWARD_PY"
-    echo -e "${GREEN}forward.py 已生成！${NC}"
-
-    # 配置完成后进行会话验证
-    echo -e "${YELLOW}=== 第四步：验证小号会话 ===${NC}"
-    echo -e "${YELLOW}现在需要验证每个小号的会话，请按照提示操作${NC}"
 
     # 激活虚拟环境
     source "$VENV_DIR/bin/activate"
 
-    # 为每个小号创建验证脚本
-    for i in $(seq 1 $account_index); do
-        session_name="session_account$i"
-        api_id=$(echo "$accounts_str" | grep -o "'api_id': '[^']*'" | sed -n "${i}p" | cut -d "'" -f 4)
-        api_hash=$(echo "$accounts_str" | grep -o "'api_hash': '[^']*'" | sed -n "${i}p" | cut -d "'" -f 4)
+    # 运行配置管理工具的创建配置功能
+    python3 "$SCRIPT_DIR/config_manager.py" --script-dir "$SCRIPT_DIR" --backup-dir "$BACKUP_DIR" --create-config
 
-        echo -e "${YELLOW}正在验证小号 $i 的会话...${NC}"
-
-        # 创建临时验证脚本
-        cat > /tmp/verify_session.py << EOL
-from telethon import TelegramClient
-import asyncio
-
-async def main():
-    client = TelegramClient('$session_name', $api_id, '$api_hash')
-    await client.start()
-    me = await client.get_me()
-    print(f"成功登录为: {me.first_name} (@{me.username})")
-    await client.disconnect()
-
-asyncio.run(main())
-EOL
-
-        # 运行验证脚本
-        python3 /tmp/verify_session.py
-
-        # 删除临时脚本
-        rm -f /tmp/verify_session.py
-    done
+    # 保存返回值
+    local result=$?
 
     # 退出虚拟环境
     deactivate
 
-    echo -e "${GREEN}所有小号会话验证完成！${NC}"
-    echo -e "${YELLOW}正在启动转发脚本...${NC}"
-    sleep 2  # 确保配置文件已写入
+    if [ $result -eq 0 ]; then
+        echo -e "${GREEN}配置已成功创建！${NC}"
+        echo -e "${YELLOW}正在启动转发脚本...${NC}"
+        sleep 2  # 确保配置文件已写入
 
-    # 启动脚本（使用静默模式）
-    start_script true
+        # 启动脚本（使用静默模式）
+        start_script true
 
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}转发脚本已成功启动！${NC}"
-        echo -e "${YELLOW}配置完成，正在返回主菜单...${NC}"
-        sleep 2
+        if [ $? -eq 0 ]; then
+            echo -e "${GREEN}转发脚本已成功启动！${NC}"
+            echo -e "${YELLOW}配置完成，正在返回主菜单...${NC}"
+            sleep 2
+        else
+            echo -e "${RED}转发脚本启动失败，请检查日志${NC}"
+            echo -e "${YELLOW}请使用主菜单中的选项 7 查看日志以获取详细错误信息${NC}"
+        fi
     else
-        echo -e "${RED}转发脚本启动失败，请检查日志${NC}"
-        echo -e "${YELLOW}请使用主菜单中的选项 7 查看日志以获取详细错误信息${NC}"
+        echo -e "${RED}配置创建失败，请重试${NC}"
     fi
 }
 
@@ -647,14 +504,28 @@ view_log() {
     fi
 }
 
-# 查看配置（以 nano 打开 forward.py）
+# 查看配置（调用配置管理工具）
 view_config() {
-    if [ -f "$FORWARD_PY" ]; then
-        nano $FORWARD_PY
-        echo -e "${GREEN}配置已保存！${NC}"
-    else
-        echo -e "${RED}forward.py 文件不存在，请先配置脚本！${NC}"
+    # 检查 config_manager.py 是否存在
+    if [ ! -f "$SCRIPT_DIR/config_manager.py" ]; then
+        echo -e "${YELLOW}正在下载配置管理工具...${NC}"
+        curl -fsSL https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/config_manager.py -o "$SCRIPT_DIR/config_manager.py"
+        chmod +x "$SCRIPT_DIR/config_manager.py"
     fi
+
+    # 激活虚拟环境
+    source "$VENV_DIR/bin/activate"
+
+    # 运行配置管理工具的编辑配置功能
+    python3 "$SCRIPT_DIR/config_manager.py" --script-dir "$SCRIPT_DIR" --backup-dir "$BACKUP_DIR" --edit-config
+
+    # 保存返回值
+    local result=$?
+
+    # 退出虚拟环境
+    deactivate
+
+    return $result
 }
 
 # 创建快捷命令
@@ -679,70 +550,25 @@ EOL
     echo -e "${GREEN}快捷命令 'tg' 已创建，您可以在任何位置输入 'tg' 来启动脚本${NC}"
 }
 
-# 管理备份文件
+# 管理备份文件（调用配置管理工具）
 manage_backups() {
-    echo -e "${YELLOW}=== 备份文件管理 ===${NC}"
-
-    # 检查备份目录
-    if [ ! -d "$BACKUP_DIR" ]; then
-        echo -e "${RED}备份目录不存在${NC}"
-        return 1
+    # 检查 config_manager.py 是否存在
+    if [ ! -f "$SCRIPT_DIR/config_manager.py" ]; then
+        echo -e "${YELLOW}正在下载配置管理工具...${NC}"
+        curl -fsSL https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/config_manager.py -o "$SCRIPT_DIR/config_manager.py"
+        chmod +x "$SCRIPT_DIR/config_manager.py"
     fi
 
-    # 列出备份文件
-    local backup_files=("$BACKUP_DIR"/forward_backup_*.tar.gz)
-    if [ ${#backup_files[@]} -eq 0 ] || [ ! -f "${backup_files[0]}" ]; then
-        echo -e "${RED}没有找到备份文件${NC}"
-        return 1
-    fi
+    # 激活虚拟环境
+    source "$VENV_DIR/bin/activate"
 
-    echo -e "${YELLOW}可用的备份文件:${NC}"
-    local i=1
-    for file in "${backup_files[@]}"; do
-        if [ -f "$file" ]; then
-            echo "$i. $(basename "$file")"
-            i=$((i+1))
-        fi
-    done
+    # 运行配置管理工具的备份管理功能
+    python3 "$SCRIPT_DIR/config_manager.py" --script-dir "$SCRIPT_DIR" --backup-dir "$BACKUP_DIR" --manage-backups
 
-    echo -e "${YELLOW}请选择要删除的备份文件编号（多个用空格分隔，输入 0 删除所有，输入 c 取消）:${NC}"
-    read -a delete_choices
+    # 退出虚拟环境
+    deactivate
 
-    # 检查是否取消
-    if [[ "${delete_choices[0]}" == "c" ]]; then
-        echo -e "${GREEN}已取消删除操作${NC}"
-        return 0
-    fi
-
-    # 检查是否删除所有
-    if [[ "${delete_choices[0]}" == "0" ]]; then
-        echo -e "${YELLOW}确认删除所有备份文件？（y/n，回车默认为 n）：${NC}"
-        read confirm_delete_all
-        if [ -z "$confirm_delete_all" ] || [ "$confirm_delete_all" != "y" ]; then
-            echo -e "${GREEN}已取消删除操作${NC}"
-            return 0
-        fi
-
-        rm -rf "$BACKUP_DIR"
-        mkdir -p "$BACKUP_DIR"
-        echo -e "${GREEN}已删除所有备份文件${NC}"
-        return 0
-    fi
-
-    # 删除选定的备份文件
-    for choice in "${delete_choices[@]}"; do
-        if [ "$choice" -gt 0 ] && [ "$choice" -lt "$i" ]; then
-            local file_to_delete="${backup_files[$((choice-1))]}"
-            if [ -f "$file_to_delete" ]; then
-                rm -f "$file_to_delete"
-                echo -e "${GREEN}已删除: $(basename "$file_to_delete")${NC}"
-            fi
-        else
-            echo -e "${RED}无效的选择: $choice${NC}"
-        fi
-    done
-
-    return 0
+    return $?
 }
 
 # 卸载脚本
@@ -941,170 +767,64 @@ cleanup_processes() {
     fi
 }
 
-# 备份配置
+# 备份配置（调用配置管理工具）
 backup_config() {
-    echo -e "${YELLOW}正在备份配置...${NC}"
-
-    # 检查 forward.py 是否存在
-    if [ ! -f "$FORWARD_PY" ]; then
-        echo -e "${RED}forward.py 文件不存在，无法备份${NC}"
-        return 1
+    # 检查 config_manager.py 是否存在
+    if [ ! -f "$SCRIPT_DIR/config_manager.py" ]; then
+        echo -e "${YELLOW}正在下载配置管理工具...${NC}"
+        curl -fsSL https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/config_manager.py -o "$SCRIPT_DIR/config_manager.py"
+        chmod +x "$SCRIPT_DIR/config_manager.py"
     fi
 
-    # 创建备份目录并设置权限
-    mkdir -p "$BACKUP_DIR"
-    chmod 755 "$BACKUP_DIR"
-    local timestamp=$(date +"%Y%m%d_%H%M%S")
-    local backup_file="$BACKUP_DIR/forward_backup_$timestamp.tar.gz"
+    # 激活虚拟环境
+    source "$VENV_DIR/bin/activate"
 
-    # 检查会话文件是否存在
-    local session_files=$(find "$SCRIPT_DIR" -name "session_account*.session" 2>/dev/null)
-    if [ -z "$session_files" ]; then
-        echo -e "${YELLOW}未找到会话文件，仅备份 forward.py${NC}"
-    else
-        echo -e "${GREEN}找到会话文件，将一并备份${NC}"
-    fi
+    # 运行配置管理工具的备份功能
+    python3 "$SCRIPT_DIR/config_manager.py" --script-dir "$SCRIPT_DIR" --backup-dir "$BACKUP_DIR" --backup
 
-    # 创建要备份的文件列表
-    local files_to_backup=""
+    # 保存返回值
+    local result=$?
 
-    # 检查并添加 forward.py（包含 API 凭证和转发规则）
-    if [ -f "$FORWARD_PY" ]; then
-        files_to_backup="$files_to_backup $(basename "$FORWARD_PY")"
-    fi
+    # 退出虚拟环境
+    deactivate
 
-    # 检查并添加会话文件（包含会话授权信息）
-    local session_files=$(find "$SCRIPT_DIR" -name "session_account*.session" 2>/dev/null)
-    if [ -n "$session_files" ]; then
-        for session in $session_files; do
-            files_to_backup="$files_to_backup $(basename "$session")"
-        done
-    fi
-
-    # 如果没有文件可备份，则返回错误
-    if [ -z "$files_to_backup" ]; then
-        echo -e "${RED}没有找到可备份的文件${NC}"
-        return 1
-    fi
-
-    # 创建备份文件
-    cd "$SCRIPT_DIR" && tar -czf "$backup_file" $files_to_backup
-
-    if [ $? -eq 0 ] && [ -f "$backup_file" ]; then
-        # 设置适当的权限，确保用户可以访问
-        chmod 644 "$backup_file"
-        echo -e "${GREEN}配置已备份到: $backup_file${NC}"
-        echo -e "${YELLOW}备份内容: forward.py（API凭证和转发规则）, 会话文件（授权信息）${NC}"
-        return 0
-    else
-        echo -e "${RED}备份失败${NC}"
-        return 1
-    fi
+    return $result
 }
 
-# 恢复配置
+# 恢复配置（调用配置管理工具）
 restore_config() {
-    echo -e "${YELLOW}可用的备份文件:${NC}"
-
-    # 检查备份目录
-    if [ ! -d "$BACKUP_DIR" ]; then
-        echo -e "${RED}备份目录不存在${NC}"
-        return 1
+    # 检查 config_manager.py 是否存在
+    if [ ! -f "$SCRIPT_DIR/config_manager.py" ]; then
+        echo -e "${YELLOW}正在下载配置管理工具...${NC}"
+        curl -fsSL https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/config_manager.py -o "$SCRIPT_DIR/config_manager.py"
+        chmod +x "$SCRIPT_DIR/config_manager.py"
     fi
 
-    # 列出备份文件
-    local backup_files=("$BACKUP_DIR"/forward_backup_*.tar.gz)
-    if [ ${#backup_files[@]} -eq 0 ] || [ ! -f "${backup_files[0]}" ]; then
-        echo -e "${RED}没有找到备份文件${NC}"
-        return 1
-    fi
-
-    local i=1
-    for file in "${backup_files[@]}"; do
-        if [ -f "$file" ]; then
-            echo "$i. $(basename "$file")"
-            i=$((i+1))
-        fi
-    done
-
-    # 选择备份文件
-    echo -e "${YELLOW}请选择要恢复的备份文件编号（输入 0 取消）:${NC}"
-    read backup_choice
-
-    if [ -z "$backup_choice" ] || [ "$backup_choice" -eq 0 ]; then
-        echo -e "${YELLOW}已取消恢复操作${NC}"
-        return 0
-    fi
-
-    if [ "$backup_choice" -gt 0 ] && [ "$backup_choice" -lt "$i" ]; then
-        local selected_file="${backup_files[$((backup_choice-1))]}"
-
-        # 安静地停止脚本（如果正在运行）
-        if pgrep -f "python.*forward.py" > /dev/null; then
-            echo -e "${YELLOW}正在停止当前运行的脚本...${NC}"
-            # 使用安静模式停止脚本
-            if [ -f "$SCRIPT_DIR/bin/stop_forward.sh" ]; then
-                $SCRIPT_DIR/bin/stop_forward.sh > /dev/null 2>&1
-            else
-                pkill -f "python.*forward.py" > /dev/null 2>&1
-            fi
-            sleep 1
-        fi
-
-        # 创建临时目录
-        local temp_dir="/tmp/forward_restore_$$"
-        mkdir -p "$temp_dir"
-
-        # 先解压到临时目录
-        echo -e "${YELLOW}正在解压备份文件...${NC}"
-        tar -xzf "$selected_file" -C "$temp_dir"
-
-        if [ $? -eq 0 ]; then
-            echo -e "${YELLOW}正在恢复配置文件到项目目录...${NC}"
-
-            # 跟踪是否有文件被恢复
-            local files_restored=0
-
-            # 复制 forward.py 到项目目录（包含 API 凭证和转发规则）
-            if [ -f "$temp_dir/forward.py" ]; then
-                cp "$temp_dir/forward.py" "$FORWARD_PY"
-                echo -e "${GREEN}已恢复 forward.py（API凭证和转发规则）${NC}"
-                files_restored=$((files_restored + 1))
-            fi
-
-            # 复制会话文件到项目目录（包含会话授权信息）
-            local session_count=0
-            for session_file in "$temp_dir"/session_account*.session; do
-                if [ -f "$session_file" ]; then
-                    cp "$session_file" "$SCRIPT_DIR/"
-                    session_count=$((session_count + 1))
-                fi
-            done
-
-            if [ $session_count -gt 0 ]; then
-                echo -e "${GREEN}已恢复 $session_count 个会话文件（授权信息）${NC}"
-                files_restored=$((files_restored + 1))
-            fi
-
-            # 检查是否有文件被恢复
-            if [ $files_restored -eq 0 ]; then
-                echo -e "${YELLOW}警告：备份文件中没有找到可恢复的文件${NC}"
-            fi
-
-            # 清理临时目录
-            rm -rf "$temp_dir"
-
-            echo -e "${GREEN}配置已成功恢复到项目目录！${NC}"
-            return 0
+    # 安静地停止脚本（如果正在运行）
+    if pgrep -f "python.*forward.py" > /dev/null; then
+        echo -e "${YELLOW}正在停止当前运行的脚本...${NC}"
+        # 使用安静模式停止脚本
+        if [ -f "$SCRIPT_DIR/bin/stop_forward.sh" ]; then
+            $SCRIPT_DIR/bin/stop_forward.sh > /dev/null 2>&1
         else
-            echo -e "${RED}解压备份文件失败${NC}"
-            rm -rf "$temp_dir"
-            return 1
+            pkill -f "python.*forward.py" > /dev/null 2>&1
         fi
-    else
-        echo -e "${RED}无效的选择${NC}"
-        return 1
+        sleep 1
     fi
+
+    # 激活虚拟环境
+    source "$VENV_DIR/bin/activate"
+
+    # 运行配置管理工具的恢复功能
+    python3 "$SCRIPT_DIR/config_manager.py" --script-dir "$SCRIPT_DIR" --backup-dir "$BACKUP_DIR" --restore
+
+    # 保存返回值
+    local result=$?
+
+    # 退出虚拟环境
+    deactivate
+
+    return $result
 }
 
 # 显示系统信息
