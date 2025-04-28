@@ -1451,7 +1451,7 @@ async def main():
 
     # 获取用户信息
     me = await client.get_me()
-    print(f"已登录为: {me.first_name} (@{me.username})")
+    print("已登录为: " + me.first_name + " (@" + (me.username or "") + ")")
 
     # 断开连接
     await client.disconnect()
