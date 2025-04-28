@@ -1,7 +1,7 @@
 # Telegram 消息转发管理工具 🚀
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Version](https://img.shields.io/badge/version-1.5.0-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-1.5.5-brightgreen.svg)
 ![Platform](https://img.shields.io/badge/platform-Linux-green.svg)
 
 这是一个用于管理 Telegram 消息转发的 Bash 脚本，支持多账号私聊消息实时转发到指定群组。通过交互式菜单，你可以轻松安装依赖、配置脚本、启动/停止脚本、查看日志等。
@@ -42,7 +42,7 @@
 
 ```plaintext
 === Telegram 消息转发管理工具 ===
-版本: 1.5.0
+版本: 1.5.5
 --- 当前状态 ---
 脚本未运行
 虚拟环境已创建
@@ -85,6 +85,7 @@
 2. 修改配置
 3. 备份配置
 4. 恢复配置
+5. 管理备份
 0. 返回主菜单
 请选择一个选项：
 ```
@@ -95,6 +96,7 @@
 | **2. 修改配置**     | 使用文本编辑器查看和编辑 forward.py 文件。  |
 | **3. 备份配置**     | 备份脚本配置和会话文件。                   |
 | **4. 恢复配置**     | 从备份文件恢复配置到项目目录。             |
+| **5. 管理备份**     | 管理备份文件，可选择性删除备份。           |
 | **0. 返回主菜单**   | 返回到主菜单。                             |
 
 #### 小号状态子菜单
@@ -159,7 +161,7 @@
 - Telegram 会话文件（session_account*.session）
 - 用户配置文件
 
-备份文件保存在用户主目录下的 `backup` 文件夹中，格式为 `forward_backup_YYYYMMDD_HHMMSS.tar.gz`。
+备份文件保存在 `/home/backup-TGfw` 目录中，格式为 `forward_backup_YYYYMMDD_HHMMSS.tar.gz`。
 
 ## ⚠️ 注意事项
 
@@ -211,6 +213,14 @@
    ```
 
 ## 🔄 更新日志
+
+### 版本 1.5.5
+- 移除无用的 supervisor 相关代码和参数
+- 添加配置管理模块，将配置相关功能分离到单独的 Python 脚本
+- 改进备份功能，只备份核心文件（API 凭证和会话文件）
+- 添加备份文件管理功能，支持选择性删除备份
+- 将备份目录改为 `/home/backup-TGfw`，更易于访问
+- 优化代码结构，减少冗余
 
 ### 版本 1.5.0
 - 添加小号状态检测和管理功能
