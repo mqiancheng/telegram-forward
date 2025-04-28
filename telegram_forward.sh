@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.5.2"
+SCRIPT_VERSION="1.5.4"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -968,27 +968,50 @@ backup_config() {
         return 1
     fi
 
-    # 创建备份目录
+    # 创建备份目录并设置权限
     mkdir -p "$BACKUP_DIR"
+    chmod 755 "$BACKUP_DIR"
     local timestamp=$(date +"%Y%m%d_%H%M%S")
     local backup_file="$BACKUP_DIR/forward_backup_$timestamp.tar.gz"
 
     # 检查会话文件是否存在
     local session_files=$(find "$SCRIPT_DIR" -name "session_account*.session" 2>/dev/null)
     if [ -z "$session_files" ]; then
-        echo -e "${YELLOW}未找到会话文件，仅备份配置文件${NC}"
+        echo -e "${YELLOW}未找到会话文件，仅备份 forward.py${NC}"
     else
         echo -e "${GREEN}找到会话文件，将一并备份${NC}"
     fi
 
+    # 创建要备份的文件列表
+    local files_to_backup=""
+
+    # 检查并添加 forward.py（包含 API 凭证和转发规则）
+    if [ -f "$FORWARD_PY" ]; then
+        files_to_backup="$files_to_backup $(basename "$FORWARD_PY")"
+    fi
+
+    # 检查并添加会话文件（包含会话授权信息）
+    local session_files=$(find "$SCRIPT_DIR" -name "session_account*.session" 2>/dev/null)
+    if [ -n "$session_files" ]; then
+        for session in $session_files; do
+            files_to_backup="$files_to_backup $(basename "$session")"
+        done
+    fi
+
+    # 如果没有文件可备份，则返回错误
+    if [ -z "$files_to_backup" ]; then
+        echo -e "${RED}没有找到可备份的文件${NC}"
+        return 1
+    fi
+
     # 创建备份文件
-    tar -czf "$backup_file" -C "$SCRIPT_DIR" $(basename "$FORWARD_PY" 2>/dev/null) $(basename "$CONFIG_FILE" 2>/dev/null) $(basename "$SCRIPT_DIR"/session_account*.session 2>/dev/null) $(basename "$SCRIPT_DIR"/.account_status.json 2>/dev/null)
+    cd "$SCRIPT_DIR" && tar -czf "$backup_file" $files_to_backup
 
     if [ $? -eq 0 ] && [ -f "$backup_file" ]; then
         # 设置适当的权限，确保用户可以访问
         chmod 644 "$backup_file"
         echo -e "${GREEN}配置已备份到: $backup_file${NC}"
-        echo -e "${YELLOW}备份内容: forward.py, 会话文件, 配置文件, 小号状态文件${NC}"
+        echo -e "${YELLOW}备份内容: forward.py（API凭证和转发规则）, 会话文件（授权信息）${NC}"
         return 0
     else
         echo -e "${RED}备份失败${NC}"
@@ -1056,30 +1079,33 @@ restore_config() {
         if [ $? -eq 0 ]; then
             echo -e "${YELLOW}正在恢复配置文件到项目目录...${NC}"
 
-            # 复制 forward.py 到项目目录
+            # 跟踪是否有文件被恢复
+            local files_restored=0
+
+            # 复制 forward.py 到项目目录（包含 API 凭证和转发规则）
             if [ -f "$temp_dir/forward.py" ]; then
                 cp "$temp_dir/forward.py" "$FORWARD_PY"
-                echo -e "${GREEN}已恢复 forward.py${NC}"
+                echo -e "${GREEN}已恢复 forward.py（API凭证和转发规则）${NC}"
+                files_restored=$((files_restored + 1))
             fi
 
-            # 复制会话文件到项目目录
-            if ls "$temp_dir"/session_account*.session &>/dev/null; then
-                cp "$temp_dir"/session_account*.session "$SCRIPT_DIR/" 2>/dev/null
-                echo -e "${GREEN}已恢复会话文件${NC}"
+            # 复制会话文件到项目目录（包含会话授权信息）
+            local session_count=0
+            for session_file in "$temp_dir"/session_account*.session; do
+                if [ -f "$session_file" ]; then
+                    cp "$session_file" "$SCRIPT_DIR/"
+                    session_count=$((session_count + 1))
+                fi
+            done
+
+            if [ $session_count -gt 0 ]; then
+                echo -e "${GREEN}已恢复 $session_count 个会话文件（授权信息）${NC}"
+                files_restored=$((files_restored + 1))
             fi
 
-            # 复制配置文件到项目目录
-            if [ -f "$temp_dir/.telegram_forward.conf" ]; then
-                cp "$temp_dir/.telegram_forward.conf" "$CONFIG_FILE"
-                echo -e "${GREEN}已恢复配置设置${NC}"
-                # 重新加载配置
-                . "$CONFIG_FILE"
-            fi
-
-            # 复制小号状态文件到项目目录
-            if [ -f "$temp_dir/.account_status.json" ]; then
-                cp "$temp_dir/.account_status.json" "$SCRIPT_DIR/.account_status.json"
-                echo -e "${GREEN}已恢复小号状态文件${NC}"
+            # 检查是否有文件被恢复
+            if [ $files_restored -eq 0 ]; then
+                echo -e "${YELLOW}警告：备份文件中没有找到可恢复的文件${NC}"
             fi
 
             # 清理临时目录
