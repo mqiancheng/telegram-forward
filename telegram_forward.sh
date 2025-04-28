@@ -1403,7 +1403,7 @@ except:
             continue
         fi
 
-        echo -e "${YELLOW}正在重新授权小号 $index (session: $session)...${NC}"
+        echo -e "${YELLOW}正在重新授权小号 $index [session: $session]...${NC}"
 
         # 删除旧的 session 文件
         if [ -f "$SCRIPT_DIR/$session.session" ]; then
