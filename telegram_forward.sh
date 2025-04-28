@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.5.0"
+SCRIPT_VERSION="1.5.1"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -312,6 +312,11 @@ EOL
 
 # 配置 forward.py 脚本
 configure_script() {
+    # 停止任何可能正在运行的脚本
+    stop_script > /dev/null 2>&1
+
+    echo -e "${YELLOW}=== 配置 Telegram 转发脚本 ===${NC}"
+    echo -e "${YELLOW}第一步：配置大号群组${NC}"
     echo -e "${YELLOW}请输入大号群组/个人的 Chat ID（例如 -4688142035）：${NC}"
     read target_chat_id
 
@@ -319,27 +324,33 @@ configure_script() {
     accounts=()
     account_index=1
 
+    echo -e "${YELLOW}=== 第二步：配置小号 ===${NC}"
+
     # 循环添加小号
     while true; do
+        echo -e "${YELLOW}正在配置小号 ${account_index}${NC}"
         echo -e "${YELLOW}请输入小号${account_index}的 api_id（从 my.telegram.org 获取）：${NC}"
         read api_id
         echo -e "${YELLOW}请输入小号${account_index}的 api_hash（从 my.telegram.org 获取）：${NC}"
         read api_hash
 
+        # 创建会话文件目录（如果不存在）
+        session_name="session_account${account_index}"
+
         # 添加小号到 accounts 数组（使用正确的换行格式）
         account_entry="    {
         'api_id': '$api_id',
         'api_hash': '$api_hash',
-        'session': 'session_account${account_index}'
+        'session': '$session_name'
     }"
         accounts+=("$account_entry")
 
-        # 询问是否继续添加小号，回车默认为 y
-        echo -e "${YELLOW}是否继续添加小号？（y/n，回车默认为 y）：${NC}"
+        # 询问是否继续添加小号，回车默认为 n
+        echo -e "${YELLOW}是否继续添加小号？（y/n，回车默认为 n）：${NC}"
         read continue_adding
-        # 如果用户直接按回车，设置默认值为 y
+        # 如果用户直接按回车，设置默认值为 n
         if [ -z "$continue_adding" ]; then
-            continue_adding="y"
+            continue_adding="n"
         fi
         if [ "$continue_adding" != "y" ]; then
             break
@@ -351,6 +362,8 @@ configure_script() {
     IFS=","
     accounts_str=$(echo "${accounts[*]}")
     unset IFS
+
+    echo -e "${YELLOW}=== 第三步：配置转发规则 ===${NC}"
 
     # 询问是否只转发特定用户/机器人的消息，回车默认为 y
     echo -e "${YELLOW}是否只转发特定用户/机器人的消息？（y/n，回车默认为 y）：${NC}"
@@ -424,13 +437,65 @@ EOPY
     # 替换模板中的变量
     sed -i "s|TARGET_CHAT_ID|$target_chat_id|g" "$FORWARD_PY"
     sed -i "s|ACCOUNTS_STR|$accounts_str|g" "$FORWARD_PY"
-    sed -i "s|ALLOWED_SENDERS|$allowed_senders|g" "$FORWARD_PY"
+    # 使用不同的分隔符避免与内容冲突
+    sed -i "s~ALLOWED_SENDERS~$allowed_senders~g" "$FORWARD_PY"
     echo -e "${GREEN}forward.py 已生成！${NC}"
 
-    # 配置完成后自动启动脚本
-    echo -e "${YELLOW}正在自动启动脚本...${NC}"
+    # 配置完成后进行会话验证
+    echo -e "${YELLOW}=== 第四步：验证小号会话 ===${NC}"
+    echo -e "${YELLOW}现在需要验证每个小号的会话，请按照提示操作${NC}"
+
+    # 激活虚拟环境
+    source "$VENV_DIR/bin/activate"
+
+    # 为每个小号创建验证脚本
+    for i in $(seq 1 $account_index); do
+        session_name="session_account$i"
+        api_id=$(echo "$accounts_str" | grep -o "'api_id': '[^']*'" | sed -n "${i}p" | cut -d "'" -f 4)
+        api_hash=$(echo "$accounts_str" | grep -o "'api_hash': '[^']*'" | sed -n "${i}p" | cut -d "'" -f 4)
+
+        echo -e "${YELLOW}正在验证小号 $i 的会话...${NC}"
+
+        # 创建临时验证脚本
+        cat > /tmp/verify_session.py << EOL
+from telethon import TelegramClient
+import asyncio
+
+async def main():
+    client = TelegramClient('$session_name', $api_id, '$api_hash')
+    await client.start()
+    me = await client.get_me()
+    print(f"成功登录为: {me.first_name} (@{me.username})")
+    await client.disconnect()
+
+asyncio.run(main())
+EOL
+
+        # 运行验证脚本
+        python3 /tmp/verify_session.py
+
+        # 删除临时脚本
+        rm -f /tmp/verify_session.py
+    done
+
+    # 退出虚拟环境
+    deactivate
+
+    echo -e "${GREEN}所有小号会话验证完成！${NC}"
+    echo -e "${YELLOW}正在启动转发脚本...${NC}"
     sleep 2  # 确保配置文件已写入
-    start_script
+
+    # 启动脚本（使用静默模式）
+    start_script true
+
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}转发脚本已成功启动！${NC}"
+        echo -e "${YELLOW}配置完成，正在返回主菜单...${NC}"
+        sleep 2
+    else
+        echo -e "${RED}转发脚本启动失败，请检查日志${NC}"
+        echo -e "${YELLOW}请使用主菜单中的选项 7 查看日志以获取详细错误信息${NC}"
+    fi
 }
 
 
@@ -453,43 +518,69 @@ EOL
 
 # 启动脚本
 start_script() {
-    echo -e "${YELLOW}正在启动服务...${NC}"
+    # 可选参数：是否静默模式
+    local silent_mode=${1:-false}
+
+    if [ "$silent_mode" != "true" ]; then
+        echo -e "${YELLOW}正在启动服务...${NC}"
+    fi
 
     # 检查 forward.py 是否存在
     if [ ! -f "$FORWARD_PY" ]; then
-        echo -e "${RED}forward.py 文件不存在，请先配置脚本！${NC}"
+        if [ "$silent_mode" != "true" ]; then
+            echo -e "${RED}forward.py 文件不存在，请先配置脚本！${NC}"
+        fi
         return 1
     fi
 
     # 检查虚拟环境是否存在
     if [ ! -d "$VENV_DIR" ]; then
-        echo -e "${RED}虚拟环境不存在，请先安装依赖！${NC}"
+        if [ "$silent_mode" != "true" ]; then
+            echo -e "${RED}虚拟环境不存在，请先安装依赖！${NC}"
+        fi
         return 1
     fi
 
     # 清理残留进程和状态文件
-    cleanup_processes
+    if [ "$silent_mode" != "true" ]; then
+        cleanup_processes
+    else
+        cleanup_processes > /dev/null 2>&1
+    fi
 
     # 使用脚本启动
-    echo -e "${YELLOW}正在启动转发脚本...${NC}"
+    if [ "$silent_mode" != "true" ]; then
+        echo -e "${YELLOW}正在启动转发脚本...${NC}"
+    fi
+
     if [ -f "$SCRIPT_DIR/bin/run_forward.sh" ]; then
-        $SCRIPT_DIR/bin/run_forward.sh
+        if [ "$silent_mode" = "true" ]; then
+            $SCRIPT_DIR/bin/run_forward.sh > /dev/null 2>&1
+        else
+            $SCRIPT_DIR/bin/run_forward.sh
+        fi
         sleep 2
 
         # 检查脚本是否成功启动
         if [ -f "$SCRIPT_DIR/forward.pid" ] && ps -p $(cat "$SCRIPT_DIR/forward.pid") > /dev/null; then
-            echo -e "${GREEN}脚本已成功启动！${NC}"
+            if [ "$silent_mode" != "true" ]; then
+                echo -e "${GREEN}脚本已成功启动！${NC}"
+            fi
         else
-            echo -e "${RED}脚本启动失败，请检查日志${NC}"
-            echo -e "${YELLOW}可能的原因：${NC}"
-            echo -e "1. Telegram API 凭证错误"
-            echo -e "2. 网络连接问题"
-            echo -e "3. Python 依赖问题"
-            echo -e "${YELLOW}请使用选项 6 查看日志以获取详细错误信息${NC}"
+            if [ "$silent_mode" != "true" ]; then
+                echo -e "${RED}脚本启动失败，请检查日志${NC}"
+                echo -e "${YELLOW}可能的原因：${NC}"
+                echo -e "1. Telegram API 凭证错误"
+                echo -e "2. 网络连接问题"
+                echo -e "3. Python 依赖问题"
+                echo -e "${YELLOW}请使用选项 7 查看日志以获取详细错误信息${NC}"
+            fi
             return 1
         fi
     else
-        echo -e "${RED}找不到启动脚本，请重新安装依赖${NC}"
+        if [ "$silent_mode" != "true" ]; then
+            echo -e "${RED}找不到启动脚本，请重新安装依赖${NC}"
+        fi
         return 1
     fi
 
