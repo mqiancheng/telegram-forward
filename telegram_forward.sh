@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.4.0"
+SCRIPT_VERSION="1.4.1"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -505,26 +505,49 @@ stop_script() {
         $SCRIPT_DIR/bin/stop_forward.sh
     else
         echo -e "${YELLOW}找不到停止脚本，尝试直接终止进程...${NC}"
+    fi
+
+    # 停止所有 run_forward.sh 进程
+    if pgrep -f "run_forward.sh" > /dev/null; then
+        echo -e "${YELLOW}正在停止 run_forward.sh 进程...${NC}"
+        pkill -f "run_forward.sh" 2>/dev/null
+        sleep 1
+    fi
+
+    # 停止所有 forward.py 进程
+    if pgrep -f "python.*forward.py" > /dev/null; then
+        echo -e "${YELLOW}正在停止 forward.py 进程...${NC}"
         pkill -f "python.*forward.py" 2>/dev/null
+        sleep 1
     fi
 
     # 清理可能残留的进程
     cleanup_processes
 
     # 验证 forward.py 停止状态
-    if ! pgrep -f "python.*forward.py" > /dev/null; then
-        echo -e "${GREEN}转发脚本已成功停止！${NC}"
+    if ! pgrep -f "python.*forward.py" > /dev/null && ! pgrep -f "run_forward.sh" > /dev/null; then
+        echo -e "${GREEN}所有转发脚本已成功停止！${NC}"
     else
-        echo -e "${RED}转发脚本停止失败，尝试强制终止...${NC}"
+        echo -e "${RED}部分转发脚本停止失败，尝试强制终止...${NC}"
         pkill -9 -f "python.*forward.py" 2>/dev/null
+        pkill -9 -f "run_forward.sh" 2>/dev/null
         sleep 1
 
-        if ! pgrep -f "python.*forward.py" > /dev/null; then
-            echo -e "${GREEN}转发脚本已强制停止！${NC}"
+        if ! pgrep -f "python.*forward.py" > /dev/null && ! pgrep -f "run_forward.sh" > /dev/null; then
+            echo -e "${GREEN}所有转发脚本已强制停止！${NC}"
         else
-            echo -e "${RED}无法停止转发脚本，请手动检查进程${NC}"
+            echo -e "${RED}无法停止所有转发脚本，请手动检查进程${NC}"
             return 1
         fi
+    fi
+
+    # 删除所有 PID 文件
+    if [ -f "$SCRIPT_DIR/forward.pid" ]; then
+        rm -f "$SCRIPT_DIR/forward.pid"
+    fi
+
+    if [ -f "$SCRIPT_DIR/monitor.pid" ]; then
+        rm -f "$SCRIPT_DIR/monitor.pid"
     fi
 
     return 0
@@ -798,6 +821,22 @@ cleanup_processes() {
         pkill -f "python.*forward.py" 2>/dev/null
         echo -e "${YELLOW}已终止 forward.py 进程${NC}"
     fi
+
+    # 杀死所有 run_forward.sh 相关进程
+    if pgrep -f "run_forward.sh" > /dev/null; then
+        pkill -f "run_forward.sh" 2>/dev/null
+        echo -e "${YELLOW}已终止 run_forward.sh 进程${NC}"
+    fi
+
+    # 杀死所有监控进程
+    if [ -f "$SCRIPT_DIR/monitor.pid" ]; then
+        pid=$(cat "$SCRIPT_DIR/monitor.pid")
+        if ps -p $pid > /dev/null; then
+            kill $pid 2>/dev/null
+            echo -e "${YELLOW}已终止监控进程 PID: $pid${NC}"
+        fi
+        rm -f "$SCRIPT_DIR/monitor.pid"
+    fi
 }
 
 # 备份配置
@@ -1069,8 +1108,26 @@ while true; do
             uninstall_script
             ;;
         0)
-            echo -e "${GREEN}退出功能菜单，脚本后台运行中...${NC}"
-            exit 0
+            echo -e "${YELLOW}您希望如何退出？${NC}"
+            echo "1. 保持转发脚本在后台运行并退出菜单"
+            echo "2. 停止所有转发脚本并完全退出"
+            read exit_choice
+
+            case $exit_choice in
+                1)
+                    echo -e "${GREEN}退出功能菜单，转发脚本继续在后台运行...${NC}"
+                    exit 0
+                    ;;
+                2)
+                    echo -e "${YELLOW}正在停止所有转发脚本...${NC}"
+                    stop_script
+                    echo -e "${GREEN}已停止所有转发脚本，完全退出。${NC}"
+                    exit 0
+                    ;;
+                *)
+                    echo -e "${RED}无效选项，返回主菜单${NC}"
+                    ;;
+            esac
             ;;
         *)
             echo -e "${RED}无效选项，请重试！${NC}"
