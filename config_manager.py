@@ -14,113 +14,14 @@ import subprocess
 from datetime import datetime
 from telethon import TelegramClient
 
-# 颜色定义
-RED = '\033[0;31m'
-GREEN = '\033[0;32m'
-YELLOW = '\033[1;33m'
-NC = '\033[0m'  # No Color
+# 导入共享库
+from utils import (
+    RED, GREEN, YELLOW, NC,
+    print_colored, get_script_dir, is_script_running,
+    stop_script, start_script, restart_script, parse_forward_py, edit_config_file
+)
 
-# 启动和停止脚本函数
-def stop_script(script_dir):
-    """停止转发脚本"""
-    print_colored("正在停止服务...", YELLOW)
-
-    # 使用脚本停止
-    stop_script_path = os.path.join(script_dir, "bin", "stop_forward.sh")
-    if os.path.exists(stop_script_path):
-        subprocess.run([stop_script_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print_colored("转发脚本已停止！", GREEN)
-        return True
-    else:
-        print_colored("找不到停止脚本，尝试直接终止进程...", YELLOW)
-        subprocess.run(["pkill", "-f", "python.*forward.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-        # 验证 forward.py 停止状态
-        try:
-            result = subprocess.run(["pgrep", "-f", "python.*forward.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if result.returncode != 0:
-                print_colored("转发脚本已成功停止！", GREEN)
-                return True
-            else:
-                print_colored("转发脚本停止失败，尝试强制终止...", RED)
-                subprocess.run(["pkill", "-9", "-f", "python.*forward.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                return True
-        except:
-            print_colored("检查进程状态时出错", RED)
-            return False
-
-def start_script(script_dir):
-    """启动转发脚本"""
-    print_colored("正在启动服务...", YELLOW)
-
-    # 使用脚本启动
-    start_script_path = os.path.join(script_dir, "bin", "run_forward.sh")
-    if os.path.exists(start_script_path):
-        subprocess.run([start_script_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print_colored("转发脚本已启动！", GREEN)
-        return True
-    else:
-        print_colored("找不到启动脚本，无法启动服务", RED)
-        return False
-
-def restart_script(script_dir):
-    """重启转发脚本"""
-    if stop_script(script_dir):
-        return start_script(script_dir)
-    return False
-
-def print_colored(text, color):
-    """打印彩色文本"""
-    print(f"{color}{text}{NC}")
-
-def get_script_dir():
-    """获取脚本目录"""
-    # 检测当前用户的主目录
-    if os.environ.get('HOME') == "/root":
-        user_home = "/root"
-    else:
-        user_home = os.environ.get('HOME', "/home/" + os.environ.get('USER', 'user'))
-
-    # 设置脚本目录
-    return user_home
-
-def parse_forward_py(forward_py_path):
-    """解析 forward.py 文件，提取账号信息"""
-    if not os.path.exists(forward_py_path):
-        return None
-
-    accounts = []
-    try:
-        with open(forward_py_path, 'r') as f:
-            content = f.read()
-
-        # 提取 accounts 部分
-        start_marker = "accounts = ["
-        end_marker = "]"
-
-        start_idx = content.find(start_marker) + len(start_marker)
-        end_idx = content.find(end_marker, start_idx)
-
-        if start_idx > 0 and end_idx > start_idx:
-            accounts_str = content[start_idx:end_idx].strip()
-
-            # 解析每个账号
-            import re
-            account_pattern = r"{\s*'api_id':\s*'([^']*)',\s*'api_hash':\s*'([^']*)',\s*'session':\s*'([^']*)'\s*}"
-            matches = re.findall(account_pattern, accounts_str)
-
-            for match in matches:
-                api_id, api_hash, session = match
-                accounts.append({
-                    'api_id': api_id,
-                    'api_hash': api_hash,
-                    'session': session
-                })
-    except Exception as e:
-        print_colored(f"解析 forward.py 时出错: {e}", RED)
-        return None
-
-    return accounts
+# 使用共享库中的函数
 
 async def verify_session(api_id, api_hash, session_name):
     """验证会话是否有效"""
@@ -524,12 +425,7 @@ async def show_config_menu(script_dir, backup_dir):
                 # 打开编辑器修改配置
                 forward_py_path = os.path.join(script_dir, "forward.py")
                 if os.path.exists(forward_py_path):
-                    if os.name == 'nt':  # Windows
-                        os.system(f"notepad {forward_py_path}")
-                    else:  # Linux/Mac
-                        editor = os.environ.get('EDITOR', 'nano')
-                        os.system(f"{editor} {forward_py_path}")
-                    print_colored("配置已保存！", GREEN)
+                    edit_config_file(forward_py_path)
 
                     # 询问是否重启脚本
                     restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
@@ -597,12 +493,7 @@ async def main():
     elif args.edit_config:
         forward_py_path = os.path.join(script_dir, "forward.py")
         if os.path.exists(forward_py_path):
-            if os.name == 'nt':  # Windows
-                os.system(f"notepad {forward_py_path}")
-            else:  # Linux/Mac
-                editor = os.environ.get('EDITOR', 'nano')
-                os.system(f"{editor} {forward_py_path}")
-            print_colored("配置已保存！", GREEN)
+            edit_config_file(forward_py_path)
 
             # 询问是否重启脚本
             restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()

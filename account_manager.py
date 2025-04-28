@@ -8,15 +8,12 @@ import subprocess
 import argparse
 import re
 
-# 颜色代码
-GREEN = '\033[0;32m'
-RED = '\033[0;31m'
-YELLOW = '\033[1;33m'
-NC = '\033[0m'  # No Color
-
-def print_colored(text, color):
-    """打印彩色文本"""
-    print(f"{color}{text}{NC}")
+# 导入共享库
+from utils import (
+    GREEN, RED, YELLOW, NC,
+    print_colored, get_script_dir, is_script_running,
+    stop_script, start_script, restart_script, parse_forward_py
+)
 
 async def check_account(session_file, api_id, api_hash):
     """检查账号状态，返回状态和用户信息"""
@@ -75,49 +72,7 @@ async def check_all_accounts(accounts):
 
     return results
 
-def parse_forward_py(file_path):
-    """解析 forward.py 文件，提取账号信息"""
-    try:
-        with open(file_path, 'r') as f:
-            content = f.read()
-
-        # 提取 accounts 部分
-        accounts_start = content.find('accounts = [')
-        accounts_end = content.find(']', accounts_start)
-
-        if accounts_start == -1 or accounts_end == -1:
-            return []
-
-        # 提取账号信息
-        accounts_str = content[accounts_start:accounts_end+1]
-
-        # 将单引号替换为双引号以便 JSON 解析
-        accounts_str = accounts_str.replace("'", '"')
-        accounts_str = accounts_str.replace("accounts = ", "")
-
-        # 解析 JSON
-        try:
-            accounts = json.loads(accounts_str)
-            return accounts
-        except json.JSONDecodeError:
-            # 如果 JSON 解析失败，使用更简单的方法
-            accounts = []
-            lines = accounts_str.strip()[1:-1].split('{')
-            for line in lines:
-                if not line.strip():
-                    continue
-                line = '{' + line
-                if line.endswith(','):
-                    line = line[:-1]
-                try:
-                    account = eval(line)
-                    accounts.append(account)
-                except:
-                    pass
-            return accounts
-    except Exception as e:
-        print_colored(f"解析 forward.py 失败: {e}", RED)
-        return []
+# 使用共享库中的 parse_forward_py 函数
 
 async def reauthorize_account(script_dir, session, api_id, api_hash):
     """重新授权账号"""
@@ -175,39 +130,7 @@ async def reauthorize_account(script_dir, session, api_id, api_hash):
     print_colored(f"账号重新授权完成！", GREEN)
     return True
 
-def stop_script(script_dir):
-    """停止转发脚本"""
-    print_colored("正在停止服务...", YELLOW)
-
-    # 使用脚本停止
-    stop_script_path = os.path.join(script_dir, "bin", "stop_forward.sh")
-    if os.path.exists(stop_script_path):
-        subprocess.run([stop_script_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    else:
-        print_colored("找不到停止脚本，尝试直接终止进程...", YELLOW)
-        subprocess.run(["pkill", "-f", "python.*forward.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    # 验证 forward.py 停止状态
-    try:
-        result = subprocess.run(["pgrep", "-f", "python.*forward.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if result.returncode != 0:
-            print_colored("转发脚本已成功停止！", GREEN)
-        else:
-            print_colored("转发脚本停止失败，尝试强制终止...", RED)
-            subprocess.run(["pkill", "-9", "-f", "python.*forward.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-            # 再次检查
-            result = subprocess.run(["pgrep", "-f", "python.*forward.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if result.returncode != 0:
-                print_colored("转发脚本已强制停止！", GREEN)
-            else:
-                print_colored("无法停止转发脚本，请手动检查进程", RED)
-                return False
-    except Exception as e:
-        print_colored(f"停止脚本时出错: {e}", RED)
-        return False
-
-    return True
+# 使用共享库中的 stop_script 函数
 
 async def add_account(script_dir, forward_py_path):
     """添加新小号"""
@@ -306,10 +229,8 @@ async def add_account(script_dir, forward_py_path):
         # 询问是否重启脚本
         restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
         if restart == "" or restart == "y":
-            # 停止脚本
-            stop_script(script_dir)
-            # 启动脚本
-            start_script(script_dir)
+            # 重启脚本
+            restart_script(script_dir)
             print_colored("转发脚本已重启！", GREEN)
 
         return True
@@ -422,10 +343,8 @@ async def delete_account(script_dir, forward_py_path):
         # 询问是否重启脚本
         restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
         if restart == "" or restart == "y":
-            # 停止脚本
-            stop_script(script_dir)
-            # 启动脚本
-            start_script(script_dir)
+            # 重启脚本
+            restart_script(script_dir)
             print_colored("转发脚本已重启！", GREEN)
 
         return True
@@ -434,19 +353,11 @@ async def delete_account(script_dir, forward_py_path):
         print_colored("无效输入，请输入数字", RED)
         return False
 
-def start_script(script_dir):
-    """启动转发脚本"""
-    print_colored("正在启动服务...", YELLOW)
+# 使用共享库中的 is_script_running 函数
 
-    # 使用脚本启动
-    start_script_path = os.path.join(script_dir, "bin", "run_forward.sh")
-    if os.path.exists(start_script_path):
-        subprocess.run([start_script_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print_colored("转发脚本已启动！", GREEN)
-        return True
-    else:
-        print_colored("找不到启动脚本，无法启动服务", RED)
-        return False
+# 使用共享库中的 start_script 函数
+
+# 使用共享库中的 restart_script 函数
 
 async def show_accounts_menu(script_dir, forward_py_path):
     """显示小号状态菜单"""
@@ -620,20 +531,11 @@ async def reauthorize_accounts_menu(script_dir, forward_py_path):
         # 询问是否重启脚本
         restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
         if restart == "" or restart == "y":
-            # 启动脚本
-            start_script(script_dir)
+            # 重启脚本
+            restart_script(script_dir)
             print_colored("转发脚本已重启！", GREEN)
 
-def get_script_dir():
-    """获取脚本目录"""
-    # 检测当前用户的主目录
-    if os.environ.get('HOME') == "/root":
-        user_home = "/root"
-    else:
-        user_home = os.environ.get('HOME', "/home/" + os.environ.get('USER', 'user'))
-
-    # 设置脚本目录
-    return os.path.join(user_home, ".telegram_forward")
+# 使用共享库中的 get_script_dir 函数
 
 async def main():
     parser = argparse.ArgumentParser(description='Telegram 小号管理工具')
