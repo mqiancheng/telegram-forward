@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.5.1"
+SCRIPT_VERSION="1.5.2"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -363,7 +363,7 @@ EOL
         echo -e "${YELLOW}账户状态检查脚本已存在，跳过复制...${NC}"
     else
         echo -e "${YELLOW}正在创建账户状态检查脚本...${NC}"
-        cat > "$SCRIPT_DIR/check_account_status.py" << EOL
+        cat > "$SCRIPT_DIR/check_account_status.py" << 'EOPY'
 #!/usr/bin/env python3
 from telethon import TelegramClient
 import asyncio
@@ -472,7 +472,7 @@ def parse_forward_py(file_path):
                     pass
             return accounts
     except Exception as e:
-        print("解析 forward.py 失败: " + str(e))
+        print(f"解析 forward.py 失败: {e}")
         return []
 
 async def main():
@@ -485,7 +485,7 @@ async def main():
 
     # 检查文件是否存在
     if not os.path.exists(forward_py_path):
-        print("错误: 文件 " + forward_py_path + " 不存在")
+        print(f"错误: 文件 {forward_py_path} 不存在")
         return
 
     # 解析 forward.py
@@ -503,7 +503,7 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-EOL
+EOPY
         chmod +x "$SCRIPT_DIR/check_account_status.py"
         echo -e "${GREEN}账户状态检查脚本已创建${NC}"
     fi
@@ -576,20 +576,20 @@ configure_script() {
     fi
 
     # 创建 forward.py
-    cat > $FORWARD_PY << EOL
+    cat > $FORWARD_PY << 'EOPY'
 from telethon import TelegramClient, events
 import asyncio
 
 # 大号的 Chat ID（消息的目标）
-target_chat_id = $target_chat_id
+target_chat_id = TARGET_CHAT_ID
 
 # 每个账号的配置（api_id, api_hash, session 文件名）
 accounts = [
-$accounts_str
+ACCOUNTS_STR
 ]
 
 # 可选：只转发特定用户/机器人的消息（留空则转发所有私聊消息）
-allowed_senders = $allowed_senders
+allowed_senders = ALLOWED_SENDERS
 
 # 创建所有账号的客户端
 clients = [TelegramClient(acc['session'], acc['api_id'], acc['api_hash']) for acc in accounts]
@@ -601,14 +601,14 @@ for client in clients:
         async def handler(event):
             # 实时转发消息到大号
             await client.forward_messages(target_chat_id, event.message)
-            print("消息已转发 (来自 " + str(event.sender_id) + ")")
+            print(f"消息已转发 (来自 {event.sender_id})")
     else:  # 转发所有私聊消息
         @client.on(events.NewMessage(chats=None))
         async def handler(event):
             # 确保只转发私聊消息（排除群组/频道）
             if event.is_private:
                 await client.forward_messages(target_chat_id, event.message)
-                print("消息已转发 (来自 " + str(event.sender_id) + ")")
+                print(f"消息已转发 (来自 {event.sender_id})")
 
 # 启动所有客户端
 async def main():
@@ -619,13 +619,17 @@ async def main():
             # 保持运行
             await asyncio.gather(*(client.run_until_disconnected() for client in clients))
         except Exception as e:
-            print("脚本异常退出: " + str(e))
+            print(f"脚本异常退出: {e}")
             print("将在 60 秒后重试...")
             await asyncio.sleep(60)
 
 # 运行主程序
 asyncio.run(main())
-EOL
+EOPY
+    # 替换模板中的变量
+    sed -i "s|TARGET_CHAT_ID|$target_chat_id|g" "$FORWARD_PY"
+    sed -i "s|ACCOUNTS_STR|$accounts_str|g" "$FORWARD_PY"
+    sed -i "s|ALLOWED_SENDERS|$allowed_senders|g" "$FORWARD_PY"
     echo -e "${GREEN}forward.py 已生成！${NC}"
 
     # 配置完成后自动启动脚本
@@ -1223,13 +1227,13 @@ accounts_status_menu() {
             # 激活虚拟环境
             source "$VENV_DIR/bin/activate"
 
-            # 解析状态文件并显示小号列表
-            python3 -c '
+            # 创建临时Python脚本来显示小号列表
+            cat > "$SCRIPT_DIR/show_accounts.py" << 'EOPY'
 import json
 import sys
 
 try:
-    with open("'"$SCRIPT_DIR/.account_status.json"'", "r") as f:
+    with open("ACCOUNT_STATUS_FILE", "r") as f:
         accounts = json.load(f)
 
     for i, account in enumerate(accounts, 1):
@@ -1242,23 +1246,29 @@ try:
         # 构建显示名称
         display_name = ""
         if username:
-            display_name = "@" + username
+            display_name = f"@{username}"
         elif first_name:
             display_name = first_name
         elif phone:
             display_name = phone
         else:
-            display_name = "小号" + str(i)
+            display_name = f"小号{i}"
 
         # 根据状态显示不同颜色
         if status == "ok":
-            print("\033[32m" + str(i) + ". " + display_name + " (正常)\033[0m")
+            print(f"\033[32m{i}. {display_name} (正常)\033[0m")
         else:
             message = account.get("message", "未知错误")
-            print("\033[31m" + str(i) + ". " + display_name + " (异常: " + message + ")\033[0m")
+            print(f"\033[31m{i}. {display_name} (异常: {message})\033[0m")
 except Exception as e:
-    print("\033[31m无法解析小号状态: " + str(e) + "\033[0m")
-'
+    print(f"\033[31m无法解析小号状态: {e}\033[0m")
+EOPY
+            # 替换文件路径
+            sed -i "s|ACCOUNT_STATUS_FILE|$SCRIPT_DIR/.account_status.json|g" "$SCRIPT_DIR/show_accounts.py"
+            # 运行脚本
+            python3 "$SCRIPT_DIR/show_accounts.py"
+            # 删除临时脚本
+            rm -f "$SCRIPT_DIR/show_accounts.py"
         else
             echo -e "${RED}无法获取小号状态信息${NC}"
         fi
@@ -1411,13 +1421,13 @@ except:
         fi
 
         # 创建临时登录脚本
-        cat > "$SCRIPT_DIR/temp_login.py" << EOL
+        cat > "$SCRIPT_DIR/temp_login.py" << 'EOPY'
 from telethon import TelegramClient
 import asyncio
 
 async def main():
     # 创建客户端
-    client = TelegramClient('$SCRIPT_DIR/$session', $api_id, '$api_hash')
+    client = TelegramClient('SESSION_PATH', API_ID, 'API_HASH')
 
     # 连接并登录
     await client.connect()
@@ -1445,7 +1455,7 @@ async def main():
                 await client.sign_in(password=password)
                 print("登录成功！")
             else:
-                print("登录失败: " + str(e))
+                print(f"登录失败: {e}")
     else:
         print("已经登录！")
 
@@ -1453,13 +1463,17 @@ async def main():
     me = await client.get_me()
     first_name = me.first_name if me.first_name else ""
     username = me.username if me.username else ""
-    print("已登录为: " + first_name + " (@" + username + ")")
+    print(f"已登录为: {first_name} (@{username})")
 
     # 断开连接
     await client.disconnect()
 
 asyncio.run(main())
-EOL
+EOPY
+        # 替换模板中的变量
+        sed -i "s|SESSION_PATH|$SCRIPT_DIR/$session|g" "$SCRIPT_DIR/temp_login.py"
+        sed -i "s|API_ID|$api_id|g" "$SCRIPT_DIR/temp_login.py"
+        sed -i "s|API_HASH|$api_hash|g" "$SCRIPT_DIR/temp_login.py"
 
         # 运行登录脚本
         python3 "$SCRIPT_DIR/temp_login.py"
