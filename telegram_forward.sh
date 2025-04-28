@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.4.2"
+SCRIPT_VERSION="1.5.0"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -620,6 +620,21 @@ uninstall_script() {
         return
     fi
 
+    # 询问是否备份配置文件
+    echo -e "${YELLOW}是否在卸载前备份配置文件？（y/n，回车默认为 y）：${NC}"
+    read backup_before_uninstall
+    # 如果用户直接按回车，设置默认值为 y
+    if [ -z "$backup_before_uninstall" ]; then
+        backup_before_uninstall="y"
+    fi
+
+    if [ "$backup_before_uninstall" = "y" ]; then
+        echo -e "${YELLOW}正在备份配置文件...${NC}"
+        backup_config
+    else
+        echo -e "${YELLOW}跳过备份配置文件${NC}"
+    fi
+
     echo -e "${YELLOW}正在停止脚本和相关进程...${NC}"
 
     # 如果在虚拟环境中，先退出虚拟环境
@@ -797,12 +812,20 @@ backup_config() {
 
     mkdir -p "$backup_dir"
 
+    # 检查会话文件是否存在
+    local session_files=$(find "$SCRIPT_DIR" -name "session_account*.session" 2>/dev/null)
+    if [ -z "$session_files" ]; then
+        echo -e "${YELLOW}未找到会话文件，仅备份配置文件${NC}"
+    else
+        echo -e "${GREEN}找到会话文件，将一并备份${NC}"
+    fi
+
     # 创建备份文件
-    tar -czf "$backup_file" -C "$SCRIPT_DIR" $(basename "$FORWARD_PY") $(basename "$CONFIG_FILE" 2>/dev/null) $(basename "$SCRIPT_DIR"/session_account*.session 2>/dev/null)
+    tar -czf "$backup_file" -C "$SCRIPT_DIR" $(basename "$FORWARD_PY") $(basename "$CONFIG_FILE" 2>/dev/null) $(basename "$SCRIPT_DIR"/session_account*.session 2>/dev/null) $(basename "$SCRIPT_DIR"/.account_status.json 2>/dev/null)
 
     if [ $? -eq 0 ] && [ -f "$backup_file" ]; then
         echo -e "${GREEN}配置已备份到: $backup_file${NC}"
-        echo -e "${YELLOW}备份内容: forward.py, 会话文件, 配置文件${NC}"
+        echo -e "${YELLOW}备份内容: forward.py, 会话文件, 配置文件, 小号状态文件${NC}"
         return 0
     else
         echo -e "${RED}备份失败${NC}"
@@ -927,6 +950,38 @@ show_system_info() {
 
 
 
+# 检查小号状态
+check_account_status() {
+    # 检查小号状态文件是否存在
+    if [ -f "$SCRIPT_DIR/.account_status.json" ]; then
+        # 使用 jq 检查状态，如果没有 jq 则使用 grep
+        if command -v jq &> /dev/null; then
+            local status=$(jq -r '.[0].status' "$SCRIPT_DIR/.account_status.json" 2>/dev/null)
+            if [ "$status" = "ok" ]; then
+                echo -e "小号状态: ${GREEN}正常${NC}"
+            elif [ "$status" = "unauthorized" ]; then
+                echo -e "小号状态: ${RED}异常（需要重新授权）${NC}"
+            elif [ "$status" = "error" ]; then
+                echo -e "小号状态: ${RED}异常（连接错误）${NC}"
+            else
+                echo -e "小号状态: ${YELLOW}未知${NC}"
+            fi
+        else
+            if grep -q "\"status\":\"ok\"" "$SCRIPT_DIR/.account_status.json" 2>/dev/null; then
+                echo -e "小号状态: ${GREEN}正常${NC}"
+            elif grep -q "\"status\":\"unauthorized\"" "$SCRIPT_DIR/.account_status.json" 2>/dev/null; then
+                echo -e "小号状态: ${RED}异常（需要重新授权）${NC}"
+            elif grep -q "\"status\":\"error\"" "$SCRIPT_DIR/.account_status.json" 2>/dev/null; then
+                echo -e "小号状态: ${RED}异常（连接错误）${NC}"
+            else
+                echo -e "小号状态: ${YELLOW}未知${NC}"
+            fi
+        fi
+    else
+        echo -e "小号状态: ${RED}未配置${NC}"
+    fi
+}
+
 # 主菜单
 show_menu() {
     echo -e "${YELLOW}=== Telegram 消息转发管理工具 ===${NC}"
@@ -935,6 +990,7 @@ show_menu() {
     check_script_status
     check_venv_status
     check_config_status
+    check_account_status
     echo -e "${YELLOW}----------------${NC}"
     echo "1. 安装依赖"
     echo "2. 配置管理"
