@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.4.1"
+SCRIPT_VERSION="1.4.2"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -648,27 +648,8 @@ uninstall_script() {
         fi
     fi
 
-    # 确保 supervisord 进程被停止
-    if pgrep -f "supervisord" > /dev/null; then
-        echo -e "${YELLOW}正在停止 supervisord...${NC}"
-
-        # 根据系统类型停止 supervisord
-        if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
-            systemctl stop supervisor 2>/dev/null
-        elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
-            systemctl stop supervisord 2>/dev/null
-        else
-            pkill -f "supervisord" 2>/dev/null
-        fi
-        sleep 1
-
-        # 如果进程仍然存在，使用强制终止
-        if pgrep -f "supervisord" > /dev/null; then
-            echo -e "${YELLOW}尝试强制终止 supervisord 进程...${NC}"
-            pkill -9 -f "supervisord" 2>/dev/null
-            sleep 1
-        fi
-    fi
+    # 停止所有相关进程
+    stop_script
 
     # 清理所有 PID 文件
     cleanup_pid_files
@@ -698,19 +679,10 @@ uninstall_script() {
         rm -rf "$VENV_DIR" && echo -e "${GREEN}已删除虚拟环境${NC}"
     fi
 
-    # 删除 supervisord 配置文件（检查多个可能的位置）
-    local supervisor_configs=(
-        "$SUPERVISOR_DIR/forward.ini"
-        "/etc/supervisor.d/forward.ini"
-        "/etc/supervisor/conf.d/forward.ini"
-        "/etc/supervisord.d/forward.ini"
-    )
-
-    for config in "${supervisor_configs[@]}"; do
-        if [ -f "$config" ]; then
-            rm -f "$config" && echo -e "${GREEN}已删除 supervisord 配置文件: $config${NC}"
-        fi
-    done
+    # 删除启动和停止脚本
+    if [ -d "$SCRIPT_DIR/bin" ]; then
+        rm -rf "$SCRIPT_DIR/bin" && echo -e "${GREEN}已删除启动和停止脚本${NC}"
+    fi
 
     # 删除日志轮转配置文件
     if [ -f "/etc/logrotate.d/forward" ]; then
@@ -736,32 +708,6 @@ uninstall_script() {
     fi
 
     echo -e "${GREEN}已清理缓存文件${NC}"
-
-    echo -e "${YELLOW}是否同时卸载 supervisor？（y/n，回车默认为 n）：${NC}"
-    read uninstall_supervisor
-    # 如果用户直接按回车，设置默认值为 n
-    if [ -z "$uninstall_supervisor" ]; then
-        uninstall_supervisor="n"
-    fi
-
-    if [ "$uninstall_supervisor" = "y" ]; then
-        echo -e "${YELLOW}正在卸载 supervisor...${NC}"
-        if [ "$OS_TYPE" = "alpine" ]; then
-            apk del supervisor 2>/dev/null && echo -e "${GREEN}已卸载 supervisor${NC}"
-        elif [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ]; then
-            apt-get remove -y supervisor 2>/dev/null && echo -e "${GREEN}已卸载 supervisor${NC}"
-        elif [ "$OS_TYPE" = "centos" ] || [ "$OS_TYPE" = "fedora" ] || [ "$OS_TYPE" = "rhel" ]; then
-            if command -v dnf &> /dev/null; then
-                dnf remove -y supervisor 2>/dev/null && echo -e "${GREEN}已卸载 supervisor${NC}"
-            else
-                yum remove -y supervisor 2>/dev/null && echo -e "${GREEN}已卸载 supervisor${NC}"
-            fi
-        else
-            echo -e "${RED}无法确定系统类型，请手动卸载 supervisor${NC}"
-        fi
-    else
-        echo -e "${YELLOW}保留 supervisor 安装${NC}"
-    fi
 
     # 删除快捷命令
     if [ -f "/usr/local/bin/tg" ]; then
@@ -797,21 +743,16 @@ EOL
 
 # 清理 PID 文件函数
 cleanup_pid_files() {
-    # 清理 supervisord PID 文件（如果存在）
-    local pid_files=(
-        "/var/run/supervisord.pid"
-        "/run/supervisord.pid"
-        "/var/run/supervisor/supervisord.pid"
-        "/var/run/supervisor.pid"
-        "/tmp/supervisord.pid"
-    )
+    # 清理转发脚本的 PID 文件
+    if [ -f "$SCRIPT_DIR/forward.pid" ]; then
+        rm -f "$SCRIPT_DIR/forward.pid" 2>/dev/null
+        echo -e "${YELLOW}已清理 PID 文件: $SCRIPT_DIR/forward.pid${NC}"
+    fi
 
-    for pid_file in "${pid_files[@]}"; do
-        if [ -f "$pid_file" ]; then
-            rm -f "$pid_file" 2>/dev/null
-            echo -e "${YELLOW}已清理 PID 文件: $pid_file${NC}"
-        fi
-    done
+    if [ -f "$SCRIPT_DIR/monitor.pid" ]; then
+        rm -f "$SCRIPT_DIR/monitor.pid" 2>/dev/null
+        echo -e "${YELLOW}已清理 PID 文件: $SCRIPT_DIR/monitor.pid${NC}"
+    fi
 }
 
 # 进程清理函数（减少代码重复）
