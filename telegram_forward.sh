@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.5.1"
+SCRIPT_VERSION="1.5.2"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -23,6 +23,7 @@ LOG_FILE="$SCRIPT_DIR/forward.log"
 VENV_DIR="$SCRIPT_DIR/venv"
 SELF_SCRIPT="$0" # 当前脚本路径
 CONFIG_FILE="$SCRIPT_DIR/.telegram_forward.conf"
+BACKUP_DIR="/home/backup-TGfw" # 新的备份目录
 
 # 检测系统类型
 if [ -f "/etc/os-release" ]; then
@@ -695,10 +696,76 @@ EOL
     echo -e "${GREEN}快捷命令 'tg' 已创建，您可以在任何位置输入 'tg' 来启动脚本${NC}"
 }
 
+# 管理备份文件
+manage_backups() {
+    echo -e "${YELLOW}=== 备份文件管理 ===${NC}"
+
+    # 检查备份目录
+    if [ ! -d "$BACKUP_DIR" ]; then
+        echo -e "${RED}备份目录不存在${NC}"
+        return 1
+    fi
+
+    # 列出备份文件
+    local backup_files=("$BACKUP_DIR"/forward_backup_*.tar.gz)
+    if [ ${#backup_files[@]} -eq 0 ] || [ ! -f "${backup_files[0]}" ]; then
+        echo -e "${RED}没有找到备份文件${NC}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}可用的备份文件:${NC}"
+    local i=1
+    for file in "${backup_files[@]}"; do
+        if [ -f "$file" ]; then
+            echo "$i. $(basename "$file")"
+            i=$((i+1))
+        fi
+    done
+
+    echo -e "${YELLOW}请选择要删除的备份文件编号（多个用空格分隔，输入 0 删除所有，输入 c 取消）:${NC}"
+    read -a delete_choices
+
+    # 检查是否取消
+    if [[ "${delete_choices[0]}" == "c" ]]; then
+        echo -e "${GREEN}已取消删除操作${NC}"
+        return 0
+    fi
+
+    # 检查是否删除所有
+    if [[ "${delete_choices[0]}" == "0" ]]; then
+        echo -e "${YELLOW}确认删除所有备份文件？（y/n，回车默认为 n）：${NC}"
+        read confirm_delete_all
+        if [ -z "$confirm_delete_all" ] || [ "$confirm_delete_all" != "y" ]; then
+            echo -e "${GREEN}已取消删除操作${NC}"
+            return 0
+        fi
+
+        rm -rf "$BACKUP_DIR"
+        mkdir -p "$BACKUP_DIR"
+        echo -e "${GREEN}已删除所有备份文件${NC}"
+        return 0
+    fi
+
+    # 删除选定的备份文件
+    for choice in "${delete_choices[@]}"; do
+        if [ "$choice" -gt 0 ] && [ "$choice" -lt "$i" ]; then
+            local file_to_delete="${backup_files[$((choice-1))]}"
+            if [ -f "$file_to_delete" ]; then
+                rm -f "$file_to_delete"
+                echo -e "${GREEN}已删除: $(basename "$file_to_delete")${NC}"
+            fi
+        else
+            echo -e "${RED}无效的选择: $choice${NC}"
+        fi
+    done
+
+    return 0
+}
+
 # 卸载脚本
 uninstall_script() {
     echo -e "${RED}警告：卸载脚本将删除除备份文件外的所有相关文件和配置！${NC}"
-    echo -e "${YELLOW}备份文件位于 $SCRIPT_DIR/backup 目录，包含您的配置和会话文件。${NC}"
+    echo -e "${YELLOW}备份文件位于 $BACKUP_DIR 目录，包含您的配置和会话文件。${NC}"
     echo -e "${YELLOW}是否确认卸载脚本？（y/n，回车默认为 n）：${NC}"
     read confirm_uninstall
     # 如果用户直接按回车，设置默认值为 n
@@ -711,19 +778,22 @@ uninstall_script() {
         return
     fi
 
-    # 询问是否备份配置文件
-    echo -e "${YELLOW}是否在卸载前备份配置文件？（y/n，回车默认为 y）：${NC}"
-    read backup_before_uninstall
-    # 如果用户直接按回车，设置默认值为 y
-    if [ -z "$backup_before_uninstall" ]; then
-        backup_before_uninstall="y"
+    # 自动创建备份
+    echo -e "${YELLOW}正在自动备份配置文件...${NC}"
+    backup_config
+
+    # 询问是否删除备份文件
+    echo -e "${YELLOW}是否删除备份文件？（y/n，回车默认为 n）：${NC}"
+    read delete_backups
+    # 如果用户直接按回车，设置默认值为 n
+    if [ -z "$delete_backups" ]; then
+        delete_backups="n"
     fi
 
-    if [ "$backup_before_uninstall" = "y" ]; then
-        echo -e "${YELLOW}正在备份配置文件...${NC}"
-        backup_config
+    if [ "$delete_backups" = "y" ]; then
+        manage_backups
     else
-        echo -e "${YELLOW}跳过备份配置文件${NC}"
+        echo -e "${YELLOW}保留备份文件${NC}"
     fi
 
     echo -e "${YELLOW}正在停止脚本和相关进程...${NC}"
@@ -826,7 +896,9 @@ uninstall_script() {
     rm -f "$SELF_SCRIPT" && echo -e "${GREEN}脚本已删除！${NC}"
 
     echo -e "${GREEN}卸载完成！${NC}"
-    echo -e "${YELLOW}备份文件已保留在 $SCRIPT_DIR/backup 目录中，如需完全清理，请手动删除该目录。${NC}"
+    if [ -d "$BACKUP_DIR" ] && [ "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
+        echo -e "${YELLOW}备份文件已保留在 $BACKUP_DIR 目录中。${NC}"
+    fi
     echo -e "${GREEN}程序即将退出。${NC}"
     exit 0
 }
@@ -897,11 +969,9 @@ backup_config() {
     fi
 
     # 创建备份目录
-    local backup_dir="$SCRIPT_DIR/backup"
+    mkdir -p "$BACKUP_DIR"
     local timestamp=$(date +"%Y%m%d_%H%M%S")
-    local backup_file="$backup_dir/forward_backup_$timestamp.tar.gz"
-
-    mkdir -p "$backup_dir"
+    local backup_file="$BACKUP_DIR/forward_backup_$timestamp.tar.gz"
 
     # 检查会话文件是否存在
     local session_files=$(find "$SCRIPT_DIR" -name "session_account*.session" 2>/dev/null)
@@ -912,9 +982,11 @@ backup_config() {
     fi
 
     # 创建备份文件
-    tar -czf "$backup_file" -C "$SCRIPT_DIR" $(basename "$FORWARD_PY") $(basename "$CONFIG_FILE" 2>/dev/null) $(basename "$SCRIPT_DIR"/session_account*.session 2>/dev/null) $(basename "$SCRIPT_DIR"/.account_status.json 2>/dev/null)
+    tar -czf "$backup_file" -C "$SCRIPT_DIR" $(basename "$FORWARD_PY" 2>/dev/null) $(basename "$CONFIG_FILE" 2>/dev/null) $(basename "$SCRIPT_DIR"/session_account*.session 2>/dev/null) $(basename "$SCRIPT_DIR"/.account_status.json 2>/dev/null)
 
     if [ $? -eq 0 ] && [ -f "$backup_file" ]; then
+        # 设置适当的权限，确保用户可以访问
+        chmod 644 "$backup_file"
         echo -e "${GREEN}配置已备份到: $backup_file${NC}"
         echo -e "${YELLOW}备份内容: forward.py, 会话文件, 配置文件, 小号状态文件${NC}"
         return 0
@@ -929,14 +1001,13 @@ restore_config() {
     echo -e "${YELLOW}可用的备份文件:${NC}"
 
     # 检查备份目录
-    local backup_dir="$SCRIPT_DIR/backup"
-    if [ ! -d "$backup_dir" ]; then
+    if [ ! -d "$BACKUP_DIR" ]; then
         echo -e "${RED}备份目录不存在${NC}"
         return 1
     fi
 
     # 列出备份文件
-    local backup_files=("$backup_dir"/forward_backup_*.tar.gz)
+    local backup_files=("$BACKUP_DIR"/forward_backup_*.tar.gz)
     if [ ${#backup_files[@]} -eq 0 ] || [ ! -f "${backup_files[0]}" ]; then
         echo -e "${RED}没有找到备份文件${NC}"
         return 1
@@ -1003,6 +1074,12 @@ restore_config() {
                 echo -e "${GREEN}已恢复配置设置${NC}"
                 # 重新加载配置
                 . "$CONFIG_FILE"
+            fi
+
+            # 复制小号状态文件到项目目录
+            if [ -f "$temp_dir/.account_status.json" ]; then
+                cp "$temp_dir/.account_status.json" "$SCRIPT_DIR/.account_status.json"
+                echo -e "${GREEN}已恢复小号状态文件${NC}"
             fi
 
             # 清理临时目录
