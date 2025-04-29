@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="2.0.2"
+SCRIPT_VERSION="2.0.3"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -23,9 +23,10 @@ LOG_FILE="$SCRIPT_DIR/forward.log"
 VENV_DIR="$SCRIPT_DIR/venv"
 SELF_SCRIPT="$0" # 当前脚本路径
 CONFIG_FILE="$SCRIPT_DIR/.telegram_forward.conf"
-BACKUP_DIR="/home/backup-TGfw" # 备份目录
+BACKUP_DIR="$USER_HOME/backup-TGfw" # 备份目录
 MODULES_DIR="$SCRIPT_DIR/modules" # 模块目录
-GITHUB_RAW_URL="https://raw.githubusercontent.com/mqiancheng/telegram-forward/main"
+LOG_DIR="$SCRIPT_DIR/logs" # 日志目录
+GITHUB_RAW_URL="https://raw.githubusercontent.com/mqiancheng/telegram-forward/test"
 
 # 检测系统类型
 if [ -f "/etc/os-release" ]; then
@@ -80,6 +81,8 @@ load_module() {
 
 # 下载所有模块
 download_all_modules() {
+    echo -e "${YELLOW}正在下载模块...${NC}"
+
     # 定义所有模块列表
     local all_modules=(
         "utils_module"
@@ -93,22 +96,56 @@ download_all_modules() {
         "uninstall_module"
     )
 
-    # 顺序下载所有模块（静默模式）
+    # 顺序下载所有模块
     for module in "${all_modules[@]}"; do
         # 检查模块文件是否存在且非空
         if [ ! -f "$MODULES_DIR/${module}.sh" ] || [ ! -s "$MODULES_DIR/${module}.sh" ]; then
-            # 尝试从GitHub下载
-            curl -fsSL "$GITHUB_RAW_URL/modules/${module}.sh" -o "$MODULES_DIR/${module}.sh" 2>/dev/null
-            chmod +x "$MODULES_DIR/${module}.sh" 2>/dev/null
+            # 尝试从test分支下载
+            curl -fsSL "$GITHUB_RAW_URL/modules/${module}.sh" -o "$MODULES_DIR/${module}.sh"
+
+            # 如果下载失败，尝试从main分支下载
+            if [ $? -ne 0 ] || [ ! -s "$MODULES_DIR/${module}.sh" ]; then
+                curl -fsSL "https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/modules/${module}.sh" -o "$MODULES_DIR/${module}.sh"
+            fi
+
+            # 设置执行权限
+            chmod +x "$MODULES_DIR/${module}.sh"
         fi
     done
 
     # 加载所有模块
     for module in "${all_modules[@]}"; do
         if [ -f "$MODULES_DIR/${module}.sh" ]; then
-            source "$MODULES_DIR/${module}.sh" 2>/dev/null
+            source "$MODULES_DIR/${module}.sh"
         fi
     done
+
+    # 验证关键函数是否存在
+    local missing_functions=0
+
+    # 检查关键函数
+    if ! type config_management_menu >/dev/null 2>&1; then
+        echo -e "${RED}错误：config_management_menu 函数未定义${NC}"
+        missing_functions=$((missing_functions+1))
+    fi
+
+    if ! type start_script >/dev/null 2>&1; then
+        echo -e "${RED}错误：start_script 函数未定义${NC}"
+        missing_functions=$((missing_functions+1))
+    fi
+
+    if ! type stop_script >/dev/null 2>&1; then
+        echo -e "${RED}错误：stop_script 函数未定义${NC}"
+        missing_functions=$((missing_functions+1))
+    fi
+
+    if [ $missing_functions -gt 0 ]; then
+        echo -e "${RED}警告：有 $missing_functions 个关键函数未定义，模块可能未正确加载${NC}"
+        echo -e "${YELLOW}请检查网络连接或GitHub仓库是否可访问${NC}"
+        sleep 2
+    else
+        echo -e "${GREEN}所有模块加载成功${NC}"
+    fi
 }
 
 # 此函数已被删除，所有模块在启动时一次性下载
@@ -349,13 +386,34 @@ main() {
     # 显示欢迎信息
     show_welcome
 
+    # 确保变量不为空
+    if [ -z "$SCRIPT_DIR" ]; then
+        SCRIPT_DIR="$USER_HOME/.telegram_forward"
+        echo -e "${YELLOW}警告：SCRIPT_DIR为空，已设置为默认值：$SCRIPT_DIR${NC}"
+    fi
+
+    if [ -z "$MODULES_DIR" ]; then
+        MODULES_DIR="$SCRIPT_DIR/modules"
+        echo -e "${YELLOW}警告：MODULES_DIR为空，已设置为默认值：$MODULES_DIR${NC}"
+    fi
+
+    if [ -z "$LOG_DIR" ]; then
+        LOG_DIR="$SCRIPT_DIR/logs"
+        echo -e "${YELLOW}警告：LOG_DIR为空，已设置为默认值：$LOG_DIR${NC}"
+    fi
+
+    if [ -z "$BACKUP_DIR" ]; then
+        BACKUP_DIR="$USER_HOME/backup-TGfw"
+        echo -e "${YELLOW}警告：BACKUP_DIR为空，已设置为默认值：$BACKUP_DIR${NC}"
+    fi
+
     # 创建必要的目录
     mkdir -p "$SCRIPT_DIR"
     mkdir -p "$MODULES_DIR"
     mkdir -p "$LOG_DIR"
     mkdir -p "$BACKUP_DIR"
 
-    # 下载并加载所有模块（静默模式）
+    # 下载并加载所有模块
     download_all_modules
 
     # 显示菜单并处理用户选择
