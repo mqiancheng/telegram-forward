@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="2.1.0"
+SCRIPT_VERSION="2.1.1"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -154,7 +154,7 @@ download_modules_package() {
 
         # 解压模块包
         mkdir -p "$MODULES_DIR"
-        tar -xzf "$package_file" -C "$SCRIPT_DIR" --strip-components=1 telegram-forward-modules 2>/dev/null
+        tar -xzf "$package_file" -C "$MODULES_DIR" --strip-components=1 telegram-forward-modules 2>/dev/null
 
         # 设置执行权限
         chmod +x "$MODULES_DIR"/*.sh 2>/dev/null
