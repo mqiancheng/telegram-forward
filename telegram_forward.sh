@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.7.2"
+SCRIPT_VERSION="1.7.3"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -299,6 +299,9 @@ configure_script() {
     # 停止任何可能正在运行的脚本
     stop_script > /dev/null 2>&1
 
+    # 先下载共享库
+    download_utils
+
     # 检查 config_manager.py 是否存在
     if [ ! -f "$SCRIPT_DIR/config_manager.py" ]; then
         echo -e "${YELLOW}正在下载配置管理工具...${NC}"
@@ -506,6 +509,9 @@ view_log() {
 
 # 查看配置（调用配置管理工具）
 view_config() {
+    # 先下载共享库
+    download_utils
+
     # 检查 config_manager.py 是否存在
     if [ ! -f "$SCRIPT_DIR/config_manager.py" ]; then
         echo -e "${YELLOW}正在下载配置管理工具...${NC}"
@@ -552,6 +558,9 @@ EOL
 
 # 管理备份文件（调用配置管理工具）
 manage_backups() {
+    # 先下载共享库
+    download_utils
+
     # 检查 config_manager.py 是否存在
     if [ ! -f "$SCRIPT_DIR/config_manager.py" ]; then
         echo -e "${YELLOW}正在下载配置管理工具...${NC}"
@@ -769,6 +778,9 @@ cleanup_processes() {
 
 # 备份配置（调用配置管理工具）
 backup_config() {
+    # 先下载共享库
+    download_utils
+
     # 检查 config_manager.py 是否存在
     if [ ! -f "$SCRIPT_DIR/config_manager.py" ]; then
         echo -e "${YELLOW}正在下载配置管理工具...${NC}"
@@ -793,6 +805,9 @@ backup_config() {
 
 # 恢复配置（调用配置管理工具）
 restore_config() {
+    # 先下载共享库
+    download_utils
+
     # 检查 config_manager.py 是否存在
     if [ ! -f "$SCRIPT_DIR/config_manager.py" ]; then
         echo -e "${YELLOW}正在下载配置管理工具...${NC}"
@@ -902,8 +917,21 @@ show_menu() {
 
 
 
+# 下载共享库
+download_utils() {
+    # 检查 utils.py 是否存在
+    if [ ! -f "$SCRIPT_DIR/utils.py" ]; then
+        echo -e "${YELLOW}正在下载共享库...${NC}"
+        curl -fsSL https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/utils.py -o "$SCRIPT_DIR/utils.py"
+        chmod +x "$SCRIPT_DIR/utils.py"
+    fi
+}
+
 # 配置管理菜单
 config_management_menu() {
+    # 先下载共享库
+    download_utils
+
     # 检查 config_manager.py 是否存在
     if [ ! -f "$SCRIPT_DIR/config_manager.py" ]; then
         echo -e "${YELLOW}正在下载配置管理工具...${NC}"
@@ -939,6 +967,9 @@ while true; do
             config_management_menu
             ;;
         3)
+            # 先下载共享库
+            download_utils
+
             # 检查 account_manager.py 是否存在
             if [ ! -f "$SCRIPT_DIR/account_manager.py" ]; then
                 echo -e "${YELLOW}正在下载小号管理工具...${NC}"
