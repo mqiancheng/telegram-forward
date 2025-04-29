@@ -159,6 +159,15 @@ restore_config() {
 
 # 管理小号
 manage_accounts() {
+    # 检查依赖是否已安装
+    if ! check_dependencies_installed; then
+        echo -e "${RED}错误：依赖未安装，无法管理小号${NC}"
+        echo -e "${YELLOW}请先使用选项 1 安装依赖${NC}"
+        echo -e "${YELLOW}按任意键返回...${NC}"
+        read -n 1
+        return 1
+    fi
+
     # 先下载共享库
     download_utils
 

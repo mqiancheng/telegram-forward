@@ -480,6 +480,10 @@ asyncio.run(main())
         if not os.path.isabs(session_name):
             session_name = os.path.join(script_dir, session_name)
 
+        # 打印会话文件的完整路径（调试信息）
+        session_file_path = f"{session_name}.session"
+        print_colored(f"会话文件将被创建在: {session_file_path}", YELLOW)
+
         try:
             client = TelegramClient(session_name, api_id, api_hash)
             await client.start()

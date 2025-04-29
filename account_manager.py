@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from telethon import TelegramClient
 import asyncio
 import sys
 import os
@@ -7,13 +6,66 @@ import json
 import subprocess
 import argparse
 import re
+import importlib.util
+import pkg_resources
+
+# 颜色定义
+GREEN = '\033[0;32m'
+RED = '\033[0;31m'
+YELLOW = '\033[1;33m'
+NC = '\033[0m'  # No Color
+
+# 检查依赖是否已安装
+def check_dependencies():
+    required_packages = ['telethon']
+    missing_packages = []
+
+    for package in required_packages:
+        try:
+            pkg_resources.get_distribution(package)
+        except pkg_resources.DistributionNotFound:
+            missing_packages.append(package)
+
+    if missing_packages:
+        print_colored(f"缺少必要的依赖: {', '.join(missing_packages)}", RED)
+        print_colored("正在尝试安装依赖...", YELLOW)
+
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", *missing_packages])
+            print_colored("依赖安装成功！", GREEN)
+            return True
+        except Exception as e:
+            print_colored(f"依赖安装失败: {e}", RED)
+            print_colored("请手动安装依赖后再运行此脚本", YELLOW)
+            return False
+
+    return True
+
+# 确保依赖已安装
+if not check_dependencies():
+    sys.exit(1)
+
+# 导入依赖
+from telethon import TelegramClient
 
 # 导入共享库
-from utils import (
-    GREEN, RED, YELLOW, NC,
-    print_colored, get_script_dir, is_script_running,
-    stop_script, start_script, restart_script, parse_forward_py
-)
+try:
+    from utils import (
+        GREEN, RED, YELLOW, NC,
+        print_colored, get_script_dir, is_script_running,
+        stop_script, start_script, restart_script, parse_forward_py
+    )
+except ImportError:
+    # 如果无法导入，定义基本函数
+    def print_colored(text, color):
+        print(f"{color}{text}{NC}")
+
+    def get_script_dir():
+        return os.path.dirname(os.path.abspath(__file__))
+
+    def restart_script(script_dir):
+        print_colored("重启脚本功能需要 utils.py，请确保该文件存在", YELLOW)
+        return False
 
 async def check_account(session_file, api_id, api_hash):
     """检查账号状态，返回状态和用户信息"""

@@ -134,16 +134,26 @@ handle_config_change() {
             if check_script_status > /dev/null; then
                 echo -e "${YELLOW}转发脚本当前正在运行，正在重启...${NC}"
                 restart_script
+                # 等待3秒，让用户看到重启结果
+                echo -e "${YELLOW}3秒后自动返回主菜单...${NC}"
+                sleep 3
             else
                 echo -e "${YELLOW}转发脚本当前未运行，正在启动...${NC}"
                 start_script
+                # 等待3秒，让用户看到启动结果
+                echo -e "${YELLOW}3秒后自动返回主菜单...${NC}"
+                sleep 3
             fi
             ;;
         [Nn]*)
             echo -e "${YELLOW}配置已保存，但未应用。您可以稍后手动启动脚本。${NC}"
+            # 等待2秒，让用户看到提示
+            sleep 2
             ;;
         *)
             echo -e "${RED}无效选项，配置已保存但未应用。${NC}"
+            # 等待2秒，让用户看到提示
+            sleep 2
             ;;
     esac
 }

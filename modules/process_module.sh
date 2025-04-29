@@ -256,9 +256,15 @@ restart_script() {
     # 检查脚本是否成功启动
     if pgrep -f "python.*forward.py" > /dev/null; then
         echo -e "${GREEN}脚本已成功重启！${NC}"
+        # 等待3秒，让用户看到重启结果
+        echo -e "${YELLOW}3秒后自动返回主菜单...${NC}"
+        sleep 3
         return 0
     else
         echo -e "${RED}脚本重启失败，请检查日志${NC}"
+        # 等待3秒，让用户看到错误信息
+        echo -e "${YELLOW}3秒后自动返回主菜单...${NC}"
+        sleep 3
         return 1
     fi
 }
