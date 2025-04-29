@@ -11,6 +11,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 这是创建Release所需的权限
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
@@ -19,7 +21,7 @@ jobs:
         id: get_version
         run: |
           VERSION=$(grep -oP 'SCRIPT_VERSION="\K[^"]+' telegram_forward_v2.sh)
-          echo "::set-output name=version::$VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
 
       - name: Create modules package
