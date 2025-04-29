@@ -16,7 +16,7 @@ detect_os_type() {
     fi
 }
 
-# 检查命令是否存在并安装（支持多种包管理器）
+# 检查命令是否存在并1安装（支持多种包管理器）
 check_command() {
     local command_name="$1"
     if ! command -v $command_name &> /dev/null; then
