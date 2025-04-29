@@ -82,20 +82,24 @@ def backup_config(script_dir, backup_dir):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_file = os.path.join(backup_dir, f"forward_backup_{timestamp}.tar.gz")
 
-    # 检查会话文件
-    session_files = glob.glob(os.path.join(script_dir, "session_account*.session"))
+    # 检查会话文件（包括.session和.session-journal文件）
+    session_files = glob.glob(os.path.join(script_dir, "session_account*.session*"))
     if not session_files:
         print_colored("未找到会话文件，仅备份 forward.py", YELLOW)
     else:
         print_colored(f"找到 {len(session_files)} 个会话文件，将一并备份", GREEN)
+        for file in session_files:
+            print_colored(f"  - {os.path.basename(file)}", YELLOW)
 
     # 创建临时目录
     with tempfile.TemporaryDirectory() as temp_dir:
         # 复制文件到临时目录
         shutil.copy2(forward_py, temp_dir)
+        print_colored(f"已复制 forward.py 到临时目录", GREEN)
 
         for session_file in session_files:
             shutil.copy2(session_file, temp_dir)
+            print_colored(f"已复制 {os.path.basename(session_file)} 到临时目录", GREEN)
 
         # 创建压缩文件
         with tarfile.open(backup_file, "w:gz") as tar:
@@ -148,6 +152,10 @@ def restore_config(script_dir, backup_dir):
             print_colored("正在解压备份文件...", YELLOW)
             with tarfile.open(selected_file, "r:gz") as tar:
                 tar.extractall(temp_dir)
+                # 列出解压出的文件
+                print_colored("备份文件中包含以下文件:", YELLOW)
+                for file in os.listdir(temp_dir):
+                    print_colored(f"  - {file}", YELLOW)
 
             print_colored("正在恢复配置文件到项目目录...", YELLOW)
 
@@ -158,25 +166,35 @@ def restore_config(script_dir, backup_dir):
             forward_py_temp = os.path.join(temp_dir, "forward.py")
             if os.path.exists(forward_py_temp):
                 shutil.copy2(forward_py_temp, os.path.join(script_dir, "forward.py"))
-                print_colored("已恢复 forward.py（API凭证和转发规则）", GREEN)
+                print_colored(f"已恢复 forward.py 到 {script_dir}", GREEN)
                 files_restored += 1
 
-            # 复制会话文件到项目目录
+            # 复制所有会话相关文件到项目目录
             session_count = 0
-            for session_file in glob.glob(os.path.join(temp_dir, "session_account*.session")):
-                shutil.copy2(session_file, script_dir)
+            for session_file in glob.glob(os.path.join(temp_dir, "session_account*.session*")):
+                dest_path = os.path.join(script_dir, os.path.basename(session_file))
+                shutil.copy2(session_file, dest_path)
+                print_colored(f"已恢复 {os.path.basename(session_file)} 到 {script_dir}", GREEN)
                 session_count += 1
 
             if session_count > 0:
-                print_colored(f"已恢复 {session_count} 个会话文件（授权信息）", GREEN)
+                print_colored(f"已恢复 {session_count} 个会话相关文件（授权信息）", GREEN)
                 files_restored += 1
+            else:
+                print_colored("警告：未找到任何会话文件，小号可能需要重新授权", RED)
 
             # 检查是否有文件被恢复
             if files_restored == 0:
                 print_colored("警告：备份文件中没有找到可恢复的文件", YELLOW)
                 return False
 
+            # 设置恢复文件的权限
+            os.chmod(os.path.join(script_dir, "forward.py"), 0o644)
+            for session_file in glob.glob(os.path.join(script_dir, "session_account*.session*")):
+                os.chmod(session_file, 0o644)
+
             print_colored("配置已成功恢复到项目目录！", GREEN)
+            print_colored(f"脚本目录: {script_dir}", YELLOW)
             return True
 
     except ValueError:
