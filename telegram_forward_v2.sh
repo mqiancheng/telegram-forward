@@ -25,7 +25,7 @@ SELF_SCRIPT="$0" # 当前脚本路径
 CONFIG_FILE="$SCRIPT_DIR/.telegram_forward.conf"
 BACKUP_DIR="/home/backup-TGfw" # 备份目录
 MODULES_DIR="$SCRIPT_DIR/modules" # 模块目录
-GITHUB_RAW_URL="https://raw.githubusercontent.com/mqiancheng/telegram-forward/main"
+GITHUB_RAW_URL="https://raw.githubusercontent.com/mqiancheng/telegram-forward/test"
 
 # 检测系统类型
 if [ -f "/etc/os-release" ]; then
@@ -57,7 +57,7 @@ download_module() {
     local module_name="$1"
     local module_url="$GITHUB_RAW_URL/modules/${module_name}.sh"
     local module_path="$MODULES_DIR/${module_name}.sh"
-    
+
     # 检查模块是否已存在
     if [ ! -f "$module_path" ]; then
         echo -e "${YELLOW}正在下载 ${module_name} 模块...${NC}"
@@ -71,7 +71,7 @@ download_module() {
 load_module() {
     local module_name="$1"
     local module_path="$MODULES_DIR/${module_name}.sh"
-    
+
     # 检查模块是否存在
     if [ -f "$module_path" ]; then
         source "$module_path"
@@ -85,13 +85,13 @@ load_module() {
 # 并行下载核心模块
 download_core_modules() {
     echo -e "${YELLOW}正在下载核心模块...${NC}"
-    
+
     # 创建一个临时目录来存储下载状态
     local tmp_dir=$(mktemp -d)
-    
+
     # 定义核心模块列表
     local core_modules=("utils_module" "status_module" "menu_module")
-    
+
     # 并行下载所有核心模块
     for module in "${core_modules[@]}"; do
         (
@@ -99,24 +99,24 @@ download_core_modules() {
             touch "$tmp_dir/$module.done"
         ) &
     done
-    
+
     # 显示下载进度
     local total=${#core_modules[@]}
     local done=0
     local spinner=('|' '/' '-' '\')
     local i=0
-    
+
     while [ $done -lt $total ]; do
         done=$(ls "$tmp_dir"/*.done 2>/dev/null | wc -l)
         percentage=$((done * 100 / total))
-        
+
         echo -ne "\r${YELLOW}下载进度: ${percentage}% ${spinner[$i]} ${NC}"
         i=$(( (i+1) % 4 ))
         sleep 0.2
     done
-    
+
     echo -e "\r${GREEN}核心模块下载完成！                ${NC}"
-    
+
     # 清理临时目录
     rm -rf "$tmp_dir"
 }
@@ -125,11 +125,11 @@ download_core_modules() {
 download_module_if_needed() {
     local module_name="$1"
     local module_path="$MODULES_DIR/${module_name}.sh"
-    
+
     if [ ! -f "$module_path" ]; then
         download_module "$module_name"
     fi
-    
+
     load_module "$module_name"
 }
 
@@ -176,7 +176,7 @@ check_account_status() {
                 # 计算正常账号数量
                 normal_count=$(grep -o "\"status\":\"ok\"" "$SCRIPT_DIR/.account_status.json" | wc -l)
                 total_count=$(grep -o "\"status\":" "$SCRIPT_DIR/.account_status.json" | wc -l)
-                
+
                 if [ $normal_count -eq $total_count ]; then
                     echo -e "小号状态: ${GREEN}正常（$normal_count 个小号）${NC}"
                 else
@@ -212,10 +212,10 @@ show_main_menu() {
     clear
     echo -e "${YELLOW}=== Telegram 消息转发管理工具 ===${NC}"
     echo -e "${YELLOW}版本: $SCRIPT_VERSION${NC}"
-    
+
     # 显示当前状态
     show_all_status
-    
+
     echo "1. 安装依赖"
     echo "2. 配置管理"
     echo "3. 小号状态"
@@ -233,7 +233,7 @@ show_main_menu() {
 # 处理主菜单选择
 handle_main_menu() {
     local choice="$1"
-    
+
     case $choice in
         1)
             # 安装依赖
@@ -347,7 +347,7 @@ handle_exit() {
 # 创建快捷命令
 create_shortcut() {
     echo -e "${YELLOW}创建快捷命令...${NC}"
-    
+
     # 检查是否有权限写入 /usr/local/bin/
     if [ -w "/usr/local/bin/" ]; then
         cat > "/usr/local/bin/tg" << EOL
@@ -358,16 +358,16 @@ EOL
         echo -e "${GREEN}已创建快捷命令 'tg'${NC}"
     else
         echo -e "${YELLOW}无权限写入 /usr/local/bin/，尝试使用 sudo${NC}"
-        
+
         # 使用 sudo 创建快捷命令
         cat > /tmp/tg_shortcut << EOL
 #!/bin/bash
 $SELF_SCRIPT "\$@"
 EOL
-        
+
         sudo mv /tmp/tg_shortcut "/usr/local/bin/tg" 2>/dev/null
         sudo chmod +x "/usr/local/bin/tg" 2>/dev/null
-        
+
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}已创建快捷命令 'tg'${NC}"
         else
@@ -382,15 +382,15 @@ EOL
 main() {
     # 显示欢迎信息
     show_welcome
-    
+
     # 下载核心模块
     download_core_modules
-    
+
     # 加载核心模块
     load_module "utils_module"
     load_module "status_module"
     load_module "menu_module"
-    
+
     # 显示菜单并处理用户选择
     while true; do
         show_main_menu
