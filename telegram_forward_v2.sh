@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="2.0.0"
+SCRIPT_VERSION="2.0.2"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -25,7 +25,7 @@ SELF_SCRIPT="$0" # 当前脚本路径
 CONFIG_FILE="$SCRIPT_DIR/.telegram_forward.conf"
 BACKUP_DIR="/home/backup-TGfw" # 备份目录
 MODULES_DIR="$SCRIPT_DIR/modules" # 模块目录
-GITHUB_RAW_URL="https://raw.githubusercontent.com/mqiancheng/telegram-forward/test"
+GITHUB_RAW_URL="https://raw.githubusercontent.com/mqiancheng/telegram-forward/main"
 
 # 检测系统类型
 if [ -f "/etc/os-release" ]; then
@@ -49,10 +49,9 @@ show_welcome() {
     clear
     echo -e "${YELLOW}=== Telegram 消息转发管理工具 ===${NC}"
     echo -e "${YELLOW}版本: $SCRIPT_VERSION${NC}"
-    echo -e "${YELLOW}正在初始化，请稍候...${NC}"
 }
 
-# 下载模块
+# 下载模块（静默模式）
 download_module() {
     local module_name="$1"
     local module_url="$GITHUB_RAW_URL/modules/${module_name}.sh"
@@ -60,169 +59,59 @@ download_module() {
 
     # 检查模块是否已存在
     if [ ! -f "$module_path" ]; then
-        echo -e "${YELLOW}正在下载 ${module_name} 模块...${NC}"
-        curl -fsSL "$module_url" -o "$module_path"
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}下载 ${module_name} 模块失败，尝试从main分支下载...${NC}"
-            curl -fsSL "https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/modules/${module_name}.sh" -o "$module_path"
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}从main分支下载 ${module_name} 模块也失败！${NC}"
-                return 1
-            fi
-        fi
-        chmod +x "$module_path"
-        echo -e "${GREEN}${module_name} 模块下载完成${NC}"
-    fi
-
-    # 验证模块内容
-    if [ -f "$module_path" ]; then
-        # 检查文件大小是否为0
-        if [ ! -s "$module_path" ]; then
-            echo -e "${RED}${module_name} 模块内容为空，重新下载...${NC}"
-            rm -f "$module_path"
-            download_module "$module_name"
-        fi
+        curl -fsSL "$module_url" -o "$module_path" 2>/dev/null
+        chmod +x "$module_path" 2>/dev/null
     fi
 }
 
-# 加载模块
+# 加载模块（静默模式）
 load_module() {
     local module_name="$1"
     local module_path="$MODULES_DIR/${module_name}.sh"
 
     # 检查模块是否存在
     if [ -f "$module_path" ]; then
-        # 检查文件是否为空
-        if [ ! -s "$module_path" ]; then
-            echo -e "${RED}错误：模块 ${module_name} 内容为空！重新下载...${NC}"
-            rm -f "$module_path"
-            download_module "$module_name"
-        fi
-
-        # 加载模块
-        echo -e "${YELLOW}加载模块 ${module_name}...${NC}"
-        source "$module_path"
-
-        # 验证模块是否正确加载
-        case "$module_name" in
-            "install_module")
-                if ! type install_dependencies >/dev/null 2>&1; then
-                    echo -e "${RED}错误：install_dependencies 函数未定义，模块加载失败！${NC}"
-                    return 1
-                fi
-                ;;
-            "config_interface")
-                if ! type config_management_menu >/dev/null 2>&1; then
-                    echo -e "${RED}错误：config_management_menu 函数未定义，模块加载失败！${NC}"
-                    return 1
-                fi
-                ;;
-            "process_module")
-                if ! type start_script >/dev/null 2>&1; then
-                    echo -e "${RED}错误：start_script 函数未定义，模块加载失败！${NC}"
-                    return 1
-                fi
-                ;;
-            "log_module")
-                if ! type log_management_menu >/dev/null 2>&1; then
-                    echo -e "${RED}错误：log_management_menu 函数未定义，模块加载失败！${NC}"
-                    return 1
-                fi
-                ;;
-            "backup_module")
-                if ! type backup_management_menu >/dev/null 2>&1; then
-                    echo -e "${RED}错误：backup_management_menu 函数未定义，模块加载失败！${NC}"
-                    return 1
-                fi
-                ;;
-            "uninstall_module")
-                if ! type uninstall_script >/dev/null 2>&1; then
-                    echo -e "${RED}错误：uninstall_script 函数未定义，模块加载失败！${NC}"
-                    return 1
-                fi
-                ;;
-        esac
-
-        echo -e "${GREEN}模块 ${module_name} 加载成功${NC}"
+        source "$module_path" 2>/dev/null
     else
-        echo -e "${RED}错误：模块 ${module_name} 不存在！${NC}"
         download_module "$module_name"
-        if [ -f "$module_path" ]; then
-            source "$module_path"
-            echo -e "${GREEN}模块 ${module_name} 加载成功${NC}"
-        else
-            echo -e "${RED}错误：无法加载模块 ${module_name}！${NC}"
-            return 1
-        fi
+        source "$module_path" 2>/dev/null
     fi
 }
 
-# 并行下载核心模块
-download_core_modules() {
-    echo -e "${YELLOW}正在下载核心模块...${NC}"
+# 下载所有模块
+download_all_modules() {
+    # 定义所有模块列表
+    local all_modules=(
+        "utils_module"
+        "status_module"
+        "process_module"
+        "config_interface"
+        "menu_module"
+        "install_module"
+        "log_module"
+        "backup_module"
+        "uninstall_module"
+    )
 
-    # 定义核心模块列表
-    local core_modules=("utils_module" "status_module" "menu_module")
-
-    # 顺序下载所有核心模块（更可靠）
-    for module in "${core_modules[@]}"; do
-        echo -e "${YELLOW}下载并加载 ${module}...${NC}"
-        download_module "$module"
-        load_module "$module"
-
-        # 验证模块是否正确加载
-        if [ $? -ne 0 ]; then
-            echo -e "${RED}错误：模块 ${module} 加载失败！尝试从main分支下载...${NC}"
-            # 尝试从main分支下载
-            curl -fsSL "https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/modules/${module}.sh" -o "$MODULES_DIR/${module}.sh"
-            if [ $? -eq 0 ]; then
-                chmod +x "$MODULES_DIR/${module}.sh"
-                load_module "$module"
-                if [ $? -ne 0 ]; then
-                    echo -e "${RED}错误：即使从main分支下载，模块 ${module} 仍然加载失败！${NC}"
-                    exit 1
-                fi
-            else
-                echo -e "${RED}错误：无法从main分支下载模块 ${module}！${NC}"
-                exit 1
-            fi
+    # 顺序下载所有模块（静默模式）
+    for module in "${all_modules[@]}"; do
+        # 检查模块文件是否存在且非空
+        if [ ! -f "$MODULES_DIR/${module}.sh" ] || [ ! -s "$MODULES_DIR/${module}.sh" ]; then
+            # 尝试从GitHub下载
+            curl -fsSL "$GITHUB_RAW_URL/modules/${module}.sh" -o "$MODULES_DIR/${module}.sh" 2>/dev/null
+            chmod +x "$MODULES_DIR/${module}.sh" 2>/dev/null
         fi
     done
 
-    echo -e "${GREEN}核心模块下载并加载完成！${NC}"
-}
-
-# 按需下载其他模块
-download_module_if_needed() {
-    local module_name="$1"
-    local module_path="$MODULES_DIR/${module_name}.sh"
-
-    if [ ! -f "$module_path" ] || [ ! -s "$module_path" ]; then
-        echo -e "${YELLOW}模块 ${module_name} 不存在或为空，正在下载...${NC}"
-        download_module "$module_name"
-    fi
-
-    # 加载模块并验证
-    load_module "$module_name"
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}错误：模块 ${module_name} 加载失败！尝试从main分支下载...${NC}"
-        # 尝试从main分支下载
-        curl -fsSL "https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/modules/${module_name}.sh" -o "$module_path"
-        if [ $? -eq 0 ]; then
-            chmod +x "$module_path"
-            load_module "$module_name"
-            if [ $? -ne 0 ]; then
-                echo -e "${RED}错误：即使从main分支下载，模块 ${module_name} 仍然加载失败！${NC}"
-                return 1
-            fi
-        else
-            echo -e "${RED}错误：无法从main分支下载模块 ${module_name}！${NC}"
-            return 1
+    # 加载所有模块
+    for module in "${all_modules[@]}"; do
+        if [ -f "$MODULES_DIR/${module}.sh" ]; then
+            source "$MODULES_DIR/${module}.sh" 2>/dev/null
         fi
-    fi
-
-    return 0
+    done
 }
+
+# 此函数已被删除，所有模块在启动时一次性下载
 
 # 检查脚本状态
 check_script_status() {
@@ -328,42 +217,18 @@ handle_main_menu() {
     case $choice in
         1)
             # 安装依赖
-            download_module_if_needed "install_module"
-            # 确保函数已加载
-            if ! type install_dependencies >/dev/null 2>&1; then
-                echo -e "${RED}错误：install_dependencies 函数未定义，重新加载模块${NC}"
-                load_module "install_module"
-            fi
             install_dependencies
             if [ $? -eq 0 ]; then
-                download_module_if_needed "log_module"
-                # 确保函数已加载
-                if ! type configure_logrotate >/dev/null 2>&1; then
-                    echo -e "${RED}错误：configure_logrotate 函数未定义，重新加载模块${NC}"
-                    load_module "log_module"
-                fi
                 configure_logrotate
                 create_shortcut
             fi
             ;;
         2)
             # 配置管理
-            download_module_if_needed "config_interface"
-            # 确保函数已加载
-            if ! type config_management_menu >/dev/null 2>&1; then
-                echo -e "${RED}错误：config_management_menu 函数未定义，重新加载模块${NC}"
-                load_module "config_interface"
-            fi
             config_management_menu
             ;;
         3)
             # 小号状态
-            download_module_if_needed "config_interface"
-            # 确保函数已加载
-            if ! type manage_accounts >/dev/null 2>&1; then
-                echo -e "${RED}错误：manage_accounts 函数未定义，重新加载模块${NC}"
-                load_module "config_interface"
-            fi
             manage_accounts
             ;;
         4)
@@ -371,31 +236,13 @@ handle_main_menu() {
             if ! check_config_status; then
                 echo -e "${RED}错误：配置文件不存在！${NC}"
                 echo -e "${YELLOW}正在自动进入配置管理菜单...${NC}"
-                download_module_if_needed "config_interface"
-                # 确保函数已加载
-                if ! type config_management_menu >/dev/null 2>&1; then
-                    echo -e "${RED}错误：config_management_menu 函数未定义，重新加载模块${NC}"
-                    load_module "config_interface"
-                fi
                 config_management_menu
             else
-                download_module_if_needed "process_module"
-                # 确保函数已加载
-                if ! type start_script >/dev/null 2>&1; then
-                    echo -e "${RED}错误：start_script 函数未定义，重新加载模块${NC}"
-                    load_module "process_module"
-                fi
                 start_script
             fi
             ;;
         5)
             # 停止脚本
-            download_module_if_needed "process_module"
-            # 确保函数已加载
-            if ! type stop_script >/dev/null 2>&1; then
-                echo -e "${RED}错误：stop_script 函数未定义，重新加载模块${NC}"
-                load_module "process_module"
-            fi
             stop_script
             ;;
         6)
@@ -403,20 +250,8 @@ handle_main_menu() {
             if ! check_config_status; then
                 echo -e "${RED}错误：配置文件不存在！${NC}"
                 echo -e "${YELLOW}正在自动进入配置管理菜单...${NC}"
-                download_module_if_needed "config_interface"
-                # 确保函数已加载
-                if ! type config_management_menu >/dev/null 2>&1; then
-                    echo -e "${RED}错误：config_management_menu 函数未定义，重新加载模块${NC}"
-                    load_module "config_interface"
-                fi
                 config_management_menu
             else
-                download_module_if_needed "process_module"
-                # 确保函数已加载
-                if ! type restart_script >/dev/null 2>&1; then
-                    echo -e "${RED}错误：restart_script 函数未定义，重新加载模块${NC}"
-                    load_module "process_module"
-                fi
                 restart_script
                 # 无论成功与否，都返回主菜单
                 sleep 1
@@ -424,44 +259,20 @@ handle_main_menu() {
             ;;
         7)
             # 日志管理
-            download_module_if_needed "log_module"
-            # 确保函数已加载
-            if ! type log_management_menu >/dev/null 2>&1; then
-                echo -e "${RED}错误：log_management_menu 函数未定义，重新加载模块${NC}"
-                load_module "log_module"
-            fi
             log_management_menu
             ;;
         8)
             # 备份管理
-            download_module_if_needed "backup_module"
-            # 确保函数已加载
-            if ! type backup_management_menu >/dev/null 2>&1; then
-                echo -e "${RED}错误：backup_management_menu 函数未定义，重新加载模块${NC}"
-                load_module "backup_module"
-            fi
             backup_management_menu
             ;;
         9)
             # 系统信息
-            download_module_if_needed "utils_module"
-            # 确保函数已加载
-            if ! type show_system_info >/dev/null 2>&1; then
-                echo -e "${RED}错误：show_system_info 函数未定义，重新加载模块${NC}"
-                load_module "utils_module"
-            fi
             show_system_info
             echo -e "${YELLOW}按任意键继续...${NC}"
             read -n 1
             ;;
         10)
             # 卸载脚本
-            download_module_if_needed "uninstall_module"
-            # 确保函数已加载
-            if ! type uninstall_script >/dev/null 2>&1; then
-                echo -e "${RED}错误：uninstall_script 函数未定义，重新加载模块${NC}"
-                load_module "uninstall_module"
-            fi
             uninstall_script
             ;;
         0)
@@ -488,7 +299,6 @@ handle_exit() {
             ;;
         2)
             echo -e "${YELLOW}正在停止所有转发脚本...${NC}"
-            download_module_if_needed "process_module"
             stop_script
             echo -e "${GREEN}已停止所有转发脚本，完全退出。${NC}"
             exit 0
@@ -539,13 +349,14 @@ main() {
     # 显示欢迎信息
     show_welcome
 
-    # 下载核心模块
-    download_core_modules
+    # 创建必要的目录
+    mkdir -p "$SCRIPT_DIR"
+    mkdir -p "$MODULES_DIR"
+    mkdir -p "$LOG_DIR"
+    mkdir -p "$BACKUP_DIR"
 
-    # 加载核心模块
-    load_module "utils_module"
-    load_module "status_module"
-    load_module "menu_module"
+    # 下载并加载所有模块（静默模式）
+    download_all_modules
 
     # 显示菜单并处理用户选择
     while true; do
