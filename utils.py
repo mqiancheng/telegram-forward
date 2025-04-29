@@ -318,6 +318,8 @@ def restart_script(script_dir):
     else:
         print_colored("脚本重启失败，请检查日志", RED)
 
+    # 不需要等待用户按键，让调用者决定是否等待
+    # 这样可以保持与 process_module.sh 中的行为一致
     return result
 
 def parse_forward_py(forward_py_path):

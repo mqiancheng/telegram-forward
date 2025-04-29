@@ -533,6 +533,9 @@ async def reauthorize_accounts_menu(script_dir, forward_py_path):
         if restart == "" or restart == "y":
             # 重启脚本
             restart_script(script_dir)
+            # 等待3秒，让用户看到重启结果
+            import time
+            time.sleep(3)
             print_colored("转发脚本已重启！", GREEN)
 
 # 使用共享库中的 get_script_dir 函数

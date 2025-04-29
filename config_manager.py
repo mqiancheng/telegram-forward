@@ -151,7 +151,14 @@ def restore_config(script_dir, backup_dir):
             # 解压备份文件
             print_colored("正在解压备份文件...", YELLOW)
             with tarfile.open(selected_file, "r:gz") as tar:
-                tar.extractall(temp_dir)
+                # 使用 filter='data' 参数解决 DeprecationWarning
+                try:
+                    # Python 3.12+ 支持 filter 参数
+                    tar.extractall(temp_dir, filter='data')
+                except TypeError:
+                    # 旧版本 Python 不支持 filter 参数
+                    tar.extractall(temp_dir)
+
                 # 列出解压出的文件
                 print_colored("备份文件中包含以下文件:", YELLOW)
                 for file in os.listdir(temp_dir):
@@ -165,20 +172,49 @@ def restore_config(script_dir, backup_dir):
             # 复制 forward.py 到项目目录
             forward_py_temp = os.path.join(temp_dir, "forward.py")
             if os.path.exists(forward_py_temp):
-                shutil.copy2(forward_py_temp, os.path.join(script_dir, "forward.py"))
-                print_colored(f"已恢复 forward.py 到 {script_dir}", GREEN)
+                # 确保目标目录存在
+                if not os.path.exists(script_dir):
+                    os.makedirs(script_dir, exist_ok=True)
+
+                # 确保使用绝对路径
+                dest_path = os.path.abspath(os.path.join(script_dir, "forward.py"))
+
+                # 复制文件
+                shutil.copy2(forward_py_temp, dest_path)
+                print_colored(f"已恢复 forward.py 到 {dest_path}", GREEN)
+
+                # 设置文件权限
+                try:
+                    os.chmod(dest_path, 0o644)
+                except Exception as e:
+                    print_colored(f"设置文件权限失败: {e}", YELLOW)
+
                 files_restored += 1
 
             # 复制所有会话相关文件到项目目录
             session_count = 0
             for session_file in glob.glob(os.path.join(temp_dir, "session_account*.session*")):
-                dest_path = os.path.join(script_dir, os.path.basename(session_file))
+                # 确保目标目录存在
+                if not os.path.exists(script_dir):
+                    os.makedirs(script_dir, exist_ok=True)
+
+                # 确保使用绝对路径
+                dest_path = os.path.abspath(os.path.join(script_dir, os.path.basename(session_file)))
+
+                # 复制文件
                 shutil.copy2(session_file, dest_path)
-                print_colored(f"已恢复 {os.path.basename(session_file)} 到 {script_dir}", GREEN)
+                print_colored(f"已恢复 {os.path.basename(session_file)} 到 {dest_path}", GREEN)
+
+                # 设置文件权限
+                try:
+                    os.chmod(dest_path, 0o644)
+                except Exception as e:
+                    print_colored(f"设置文件权限失败: {e}", YELLOW)
+
                 session_count += 1
 
             if session_count > 0:
-                print_colored(f"已恢复 {session_count} 个会话相关文件（授权信息）", GREEN)
+                print_colored(f"已恢复 {session_count} 个会话相关文件（授权信息）到 {script_dir}", GREEN)
                 files_restored += 1
             else:
                 print_colored("警告：未找到任何会话文件，小号可能需要重新授权", RED)
@@ -188,10 +224,8 @@ def restore_config(script_dir, backup_dir):
                 print_colored("警告：备份文件中没有找到可恢复的文件", YELLOW)
                 return False
 
-            # 设置恢复文件的权限
-            os.chmod(os.path.join(script_dir, "forward.py"), 0o644)
-            for session_file in glob.glob(os.path.join(script_dir, "session_account*.session*")):
-                os.chmod(session_file, 0o644)
+            # 确保所有恢复的文件都有正确的权限
+            print_colored("已完成所有文件的恢复和权限设置", GREEN)
 
             print_colored("配置已成功恢复到项目目录！", GREEN)
             print_colored(f"脚本目录: {script_dir}", YELLOW)
@@ -482,6 +516,9 @@ async def show_config_menu(script_dir, backup_dir):
                     restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
                     if restart == "" or restart == "y":
                         restart_script(script_dir)
+                        # 等待3秒，让用户看到重启结果
+                        import time
+                        time.sleep(3)
             elif choice == 2:
                 # 打开编辑器修改配置
                 forward_py_path = os.path.join(script_dir, "forward.py")
@@ -492,6 +529,9 @@ async def show_config_menu(script_dir, backup_dir):
                     restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
                     if restart == "" or restart == "y":
                         restart_script(script_dir)
+                        # 等待3秒，让用户看到重启结果
+                        import time
+                        time.sleep(3)
                 else:
                     print_colored("forward.py 文件不存在，请先创建配置", RED)
             elif choice == 3:
@@ -505,6 +545,9 @@ async def show_config_menu(script_dir, backup_dir):
                     restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
                     if restart == "" or restart == "y":
                         restart_script(script_dir)
+                        # 等待3秒，让用户看到重启结果
+                        import time
+                        time.sleep(3)
             elif choice == 5:
                 manage_backups(backup_dir)
             elif choice == 0:
@@ -539,6 +582,9 @@ async def main():
             restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
             if restart == "" or restart == "y":
                 restart_script(script_dir)
+                # 等待3秒，让用户看到重启结果
+                import time
+                time.sleep(3)
         return 0 if success else 1
     elif args.manage_backups:
         success = manage_backups(backup_dir)
@@ -550,6 +596,9 @@ async def main():
             restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
             if restart == "" or restart == "y":
                 restart_script(script_dir)
+                # 等待3秒，让用户看到重启结果
+                import time
+                time.sleep(3)
         return 0 if success else 1
     elif args.edit_config:
         forward_py_path = os.path.join(script_dir, "forward.py")
@@ -560,6 +609,9 @@ async def main():
             restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
             if restart == "" or restart == "y":
                 restart_script(script_dir)
+                # 等待3秒，让用户看到重启结果
+                import time
+                time.sleep(3)
             return 0
         else:
             print_colored("forward.py 文件不存在，请先创建配置", RED)

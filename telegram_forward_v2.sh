@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="2.1.1"
+SCRIPT_VERSION="2.1.2"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -268,9 +268,51 @@ show_main_menu() {
     echo -e "${YELLOW}请选择一个选项：${NC}"
 }
 
+# 检查依赖是否已安装
+check_dependencies_installed() {
+    # 检查虚拟环境是否存在
+    if [ ! -d "$VENV_DIR" ]; then
+        return 1
+    fi
+
+    # 检查关键依赖是否已安装
+    if ! $PYTHON_CMD -c "import telethon" 2>/dev/null; then
+        return 1
+    fi
+
+    return 0
+}
+
 # 处理主菜单选择
 handle_main_menu() {
     local choice="$1"
+
+    # 对于需要依赖的选项，先检查依赖是否已安装
+    if [[ "$choice" =~ ^[2-9]$ ]] && ! check_dependencies_installed; then
+        echo -e "${YELLOW}检测到依赖未安装，需要先安装依赖才能使用此功能${NC}"
+        echo -e "${YELLOW}是否现在安装依赖？(y/n): ${NC}"
+        read install_deps
+        if [ "$install_deps" = "y" ]; then
+            install_dependencies
+            if [ $? -eq 0 ]; then
+                configure_logrotate
+                create_shortcut
+                echo -e "${GREEN}依赖安装完成，现在可以使用所选功能${NC}"
+                echo -e "${YELLOW}按任意键继续...${NC}"
+                read -n 1
+            else
+                echo -e "${RED}依赖安装失败，无法继续${NC}"
+                echo -e "${YELLOW}按任意键返回主菜单...${NC}"
+                read -n 1
+                return
+            fi
+        else
+            echo -e "${YELLOW}已取消安装依赖，返回主菜单${NC}"
+            echo -e "${YELLOW}按任意键继续...${NC}"
+            read -n 1
+            return
+        fi
+    fi
 
     case $choice in
         1)
@@ -311,8 +353,8 @@ handle_main_menu() {
                 config_management_menu
             else
                 restart_script
-                # 无论成功与否，都返回主菜单
-                sleep 1
+                # 等待3秒，让用户看到重启结果，然后自动返回主菜单
+                sleep 3
             fi
             ;;
         7)
