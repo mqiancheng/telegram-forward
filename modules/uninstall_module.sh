@@ -6,6 +6,50 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# 备份配置
+backup_config() {
+    echo -e "${YELLOW}正在备份配置...${NC}"
+
+    # 确保备份目录存在
+    mkdir -p "$BACKUP_DIR"
+
+    # 创建时间戳
+    timestamp=$(date +"%Y%m%d_%H%M%S")
+    backup_file="$BACKUP_DIR/forward_backup_${timestamp}.tar.gz"
+
+    # 创建临时目录
+    temp_dir=$(mktemp -d)
+
+    # 复制 forward.py 到临时目录（如果存在）
+    if [ -f "$FORWARD_PY" ]; then
+        cp "$FORWARD_PY" "$temp_dir/"
+        echo -e "${GREEN}已备份 forward.py（API凭证和转发规则）${NC}"
+    else
+        echo -e "${YELLOW}未找到 forward.py，跳过备份${NC}"
+    fi
+
+    # 复制会话文件到临时目录
+    session_files=$(find "$SCRIPT_DIR" -name "session_account*.session*" 2>/dev/null)
+    if [ -n "$session_files" ]; then
+        for file in $session_files; do
+            cp "$file" "$temp_dir/"
+            echo -e "${GREEN}已备份 $(basename "$file")（授权信息）${NC}"
+        done
+    else
+        echo -e "${YELLOW}未找到会话文件，跳过备份${NC}"
+    fi
+
+    # 创建压缩文件
+    tar -czf "$backup_file" -C "$temp_dir" .
+
+    # 清理临时目录
+    rm -rf "$temp_dir"
+
+    echo -e "${GREEN}配置已备份到: $backup_file${NC}"
+    echo -e "${YELLOW}备份内容: forward.py（API凭证和转发规则）, 会话文件（授权信息）${NC}"
+    return 0
+}
+
 # 卸载脚本
 uninstall_script() {
     echo -e "${YELLOW}=== 卸载 Telegram 转发脚本 ===${NC}"
@@ -150,14 +194,14 @@ uninstall_script() {
             # 列出所有备份文件
             echo -e "${YELLOW}可用的备份文件:${NC}"
             backup_files=($(find "$BACKUP_DIR" -name "forward_backup_*.tar.gz" | sort))
-            
+
             for i in "${!backup_files[@]}"; do
                 echo "$((i+1)). $(basename "${backup_files[$i]}")"
             done
-            
+
             echo -e "${YELLOW}请选择要删除的备份文件编号（多个用空格分隔，输入 0 删除所有，输入 c 取消）:${NC}"
             read choice
-            
+
             if [ "$choice" = "c" ]; then
                 echo -e "${GREEN}已取消删除备份文件${NC}"
             elif [ "$choice" = "0" ]; then
@@ -172,6 +216,42 @@ uninstall_script() {
                 done
             fi
         fi
+    fi
+
+    # 删除备份目录（如果为空）
+    if [ -d "$BACKUP_DIR" ] && [ -z "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
+        rmdir "$BACKUP_DIR" 2>/dev/null && echo -e "${GREEN}已删除空的备份目录${NC}"
+    fi
+
+    # 删除模块目录
+    if [ -d "$SCRIPT_DIR/modules" ]; then
+        rm -rf "$SCRIPT_DIR/modules" && echo -e "${GREEN}已删除模块目录${NC}"
+    fi
+
+    # 删除web目录
+    if [ -d "$SCRIPT_DIR/web" ]; then
+        rm -rf "$SCRIPT_DIR/web" && echo -e "${GREEN}已删除web目录${NC}"
+    fi
+
+    # 删除主脚本文件
+    if [ -f "$SCRIPT_DIR/telegram_forward_v2.sh" ]; then
+        rm -f "$SCRIPT_DIR/telegram_forward_v2.sh" && echo -e "${GREEN}已删除主脚本文件${NC}"
+    fi
+
+    # 删除其他可能存在的文件
+    find "$SCRIPT_DIR" -type f -name "*.py" -delete
+    find "$SCRIPT_DIR" -type f -name "*.sh" -delete
+    find "$SCRIPT_DIR" -type f -name "*.txt" -delete
+    find "$SCRIPT_DIR" -type f -name "*.json" -delete
+    find "$SCRIPT_DIR" -type f -name "*.session*" -delete
+
+    # 最后删除主目录（如果是在主目录内运行，则需要先切换到上级目录）
+    if [ "$SCRIPT_DIR" = "$HOME/.telegram_forward" ]; then
+        echo -e "${YELLOW}正在删除主目录 $SCRIPT_DIR...${NC}"
+        # 切换到上级目录
+        cd "$HOME"
+        # 删除主目录
+        rm -rf "$SCRIPT_DIR" && echo -e "${GREEN}已删除主目录 $SCRIPT_DIR${NC}"
     fi
 
     echo -e "${GREEN}卸载完成！${NC}"
