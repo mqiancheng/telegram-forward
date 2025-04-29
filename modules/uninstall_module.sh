@@ -10,19 +10,35 @@ NC='\033[0m' # No Color
 uninstall_script() {
     echo -e "${YELLOW}=== 卸载 Telegram 转发脚本 ===${NC}"
     echo -e "${RED}警告：此操作将删除所有脚本文件和配置！${NC}"
-    echo -e "${YELLOW}是否继续？(y/n): ${NC}"
+    echo -e "${YELLOW}是否继续卸载脚本？(y/n，默认n): ${NC}"
     read confirm
     if [ "$confirm" != "y" ]; then
         echo -e "${GREEN}已取消卸载${NC}"
         return 0
     fi
 
-    # 询问是否备份配置
-    echo -e "${YELLOW}是否在卸载前备份配置？(y/n，默认y): ${NC}"
-    read backup_confirm
-    if [ "$backup_confirm" = "" ] || [ "$backup_confirm" = "y" ]; then
-        # 备份配置
-        backup_config
+    # 自动备份配置（有提示）
+    echo -e "${YELLOW}正在自动备份小号API和会话文件...${NC}"
+    backup_config
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}小号API和会话文件备份成功！备份文件保存在 $BACKUP_DIR${NC}"
+    else
+        echo -e "${RED}备份失败！${NC}"
+        echo -e "${YELLOW}是否继续卸载？(y/n，默认n): ${NC}"
+        read continue_confirm
+        if [ "$continue_confirm" != "y" ]; then
+            echo -e "${GREEN}已取消卸载${NC}"
+            return 0
+        fi
+    fi
+
+    # 询问是否删除备份文件
+    echo -e "${YELLOW}是否删除备份文件夹中的备份文件？(y/n/c，默认n，c取消卸载): ${NC}"
+    read delete_backup
+
+    if [ "$delete_backup" = "c" ]; then
+        echo -e "${GREEN}已取消卸载${NC}"
+        return 0
     fi
 
     echo -e "${YELLOW}正在停止脚本和相关进程...${NC}"
@@ -142,39 +158,61 @@ uninstall_script() {
         fi
     fi
 
-    # 询问是否删除备份文件
-    if [ -d "$BACKUP_DIR" ] && [ "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
-        echo -e "${YELLOW}是否删除备份文件？(y/n，默认n): ${NC}"
-        read delete_backup
-        if [ "$delete_backup" = "y" ]; then
-            # 列出所有备份文件
-            echo -e "${YELLOW}可用的备份文件:${NC}"
-            backup_files=($(find "$BACKUP_DIR" -name "forward_backup_*.tar.gz" | sort))
-            
-            for i in "${!backup_files[@]}"; do
-                echo "$((i+1)). $(basename "${backup_files[$i]}")"
-            done
-            
-            echo -e "${YELLOW}请选择要删除的备份文件编号（多个用空格分隔，输入 0 删除所有，输入 c 取消）:${NC}"
-            read choice
-            
-            if [ "$choice" = "c" ]; then
-                echo -e "${GREEN}已取消删除备份文件${NC}"
-            elif [ "$choice" = "0" ]; then
-                rm -f "$BACKUP_DIR"/forward_backup_*.tar.gz && echo -e "${GREEN}已删除所有备份文件${NC}"
+    # 删除脚本文件和配置
+    echo -e "${YELLOW}正在删除脚本文件和配置...${NC}"
+
+    # 删除脚本目录
+    if [ -d "$SCRIPT_DIR" ]; then
+        echo -e "${YELLOW}正在删除脚本目录...${NC}"
+        rm -rf "$SCRIPT_DIR" && echo -e "${GREEN}已删除脚本目录 $SCRIPT_DIR${NC}"
+    fi
+
+    # 删除快捷命令（如果存在）
+    if [ -f "/usr/local/bin/tg" ]; then
+        if [ -w "/usr/local/bin/tg" ]; then
+            rm -f "/usr/local/bin/tg" && echo -e "${GREEN}已删除快捷命令${NC}"
+        else
+            sudo rm -f "/usr/local/bin/tg" 2>/dev/null
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}已删除快捷命令${NC}"
             else
-                for num in $choice; do
-                    if [ "$num" -ge 1 ] && [ "$num" -le "${#backup_files[@]}" ]; then
-                        rm -f "${backup_files[$((num-1))]}" && echo -e "${GREEN}已删除 $(basename "${backup_files[$((num-1))]}")${NC}"
-                    else
-                        echo -e "${RED}无效的选择: $num${NC}"
-                    fi
-                done
+                echo -e "${YELLOW}无法删除快捷命令，请手动删除 /usr/local/bin/tg${NC}"
             fi
         fi
     fi
 
-    echo -e "${GREEN}卸载完成！${NC}"
-    echo -e "${YELLOW}感谢使用 Telegram 转发脚本！${NC}"
-    exit 0
+    # 根据用户选择删除备份文件
+    if [ "$delete_backup" = "y" ]; then
+        if [ -d "$BACKUP_DIR" ]; then
+            echo -e "${YELLOW}正在删除备份文件夹中的备份文件...${NC}"
+            rm -rf "$BACKUP_DIR"/* && echo -e "${GREEN}已删除备份文件夹中的所有备份文件${NC}"
+        fi
+    else
+        echo -e "${GREEN}保留备份文件夹中的备份文件${NC}"
+    fi
+
+    # 删除脚本本身（最后执行）
+    if [ -f "$SELF_SCRIPT" ]; then
+        echo -e "${YELLOW}正在删除脚本文件...${NC}"
+        # 使用变量保存脚本路径，因为脚本即将被删除
+        local script_path="$SELF_SCRIPT"
+
+        echo -e "${GREEN}卸载完成！${NC}"
+        echo -e "${YELLOW}感谢使用 Telegram 转发脚本！${NC}"
+
+        # 如果当前执行的就是要删除的脚本，使用特殊方式退出
+        if [ "$SELF_SCRIPT" = "$0" ]; then
+            echo -e "${YELLOW}脚本将在3秒后自动退出并删除自身...${NC}"
+            sleep 3
+            # 使用exec启动一个新的shell，然后删除当前脚本
+            exec bash -c "rm -f $0; echo '已删除脚本文件 $0'; exit 0"
+        else
+            rm -f "$script_path" && echo -e "${GREEN}已删除脚本文件 $script_path${NC}"
+            exit 0
+        fi
+    else
+        echo -e "${GREEN}卸载完成！${NC}"
+        echo -e "${YELLOW}感谢使用 Telegram 转发脚本！${NC}"
+        exit 0
+    fi
 }
