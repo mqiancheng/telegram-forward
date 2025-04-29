@@ -182,7 +182,8 @@ async def add_account(script_dir, forward_py_path):
 
     # 验证新会话
     print_colored("正在验证新小号会话...", YELLOW)
-    client = TelegramClient(os.path.join(script_dir, session_name), api_id, api_hash)
+    # 会话文件应该直接存放在当前目录，而不是script_dir目录
+    client = TelegramClient(session_name, api_id, api_hash)
 
     try:
         # 连接并登录
@@ -267,7 +268,8 @@ async def delete_account(script_dir, forward_py_path):
 
         # 尝试获取更多信息
         try:
-            client = TelegramClient(os.path.join(script_dir, session), api_id, account['api_hash'])
+            # 会话文件应该直接存放在当前目录，而不是script_dir目录
+            client = TelegramClient(session, api_id, account['api_hash'])
             await client.connect()
             if await client.is_user_authorized():
                 me = await client.get_me()
@@ -298,7 +300,8 @@ async def delete_account(script_dir, forward_py_path):
         # 获取要删除的账号
         account_to_delete = accounts[choice - 1]
         session_name = account_to_delete['session']
-        session_file = os.path.join(script_dir, session_name + ".session")
+        # 会话文件应该直接存放在当前目录，而不是script_dir目录
+        session_file = session_name + ".session"
 
         # 删除会话文件
         if os.path.exists(session_file):
@@ -362,31 +365,163 @@ async def delete_account(script_dir, forward_py_path):
 async def show_accounts_menu(script_dir, forward_py_path):
     """显示小号状态菜单"""
     while True:
-        print_colored("=== 小号状态菜单 ===", YELLOW)
-        print("1. 查看小号状态")
-        print("2. 重新授权小号")
-        print("3. 添加新小号")
-        print("4. 删除小号")
+        print_colored("=== 小号管理 ===", YELLOW)
+
+        # 检查 forward.py 是否存在
+        if not os.path.exists(forward_py_path):
+            print_colored("错误：配置文件不存在！", RED)
+            print_colored("请先使用配置管理，创建配置文件。", YELLOW)
+            input("按 Enter 键返回...")
+            return
+
+        # 解析 forward.py
+        accounts = parse_forward_py(forward_py_path)
+
+        if not accounts:
+            print_colored("当前没有配置任何小号", YELLOW)
+        else:
+            # 检查所有账号状态
+            results = await check_all_accounts(accounts)
+
+            # 保存状态到临时文件
+            status_file = os.path.join(script_dir, ".account_status.json")
+            with open(status_file, 'w') as f:
+                json.dump(results, f, ensure_ascii=False)
+
+            # 显示小号列表
+            print_colored("当前小号列表：", YELLOW)
+            for i, account in enumerate(results, 1):
+                status = account.get("status", "unknown")
+                username = account.get("username", "")
+                first_name = account.get("first_name", "")
+                phone = account.get("phone", "")
+
+                # 构建显示名称
+                display_name = ""
+                if username:
+                    display_name = f"@{username}"
+                elif first_name:
+                    display_name = first_name
+                elif phone:
+                    display_name = phone
+                else:
+                    display_name = f"小号{i}"
+
+                # 根据状态显示不同颜色
+                if status == "ok":
+                    print_colored(f"{i}. {display_name} (正常)", GREEN)
+                else:
+                    message = account.get("message", "未知错误")
+                    print_colored(f"{i}. {display_name} (异常: {message})", RED)
+
+        print_colored("----------------", YELLOW)
+        print("a. 添加新小号")
+        print("c. 删除小号")
+        print("r. 重新授权小号")
         print("0. 返回主菜单")
-        print_colored("请选择一个选项：", YELLOW)
+        print_colored("请选择一个选项（输入数字选择小号，或输入功能键）：", YELLOW)
 
-        try:
-            choice = int(input().strip())
+        choice = input().strip().lower()
 
-            if choice == 1:
-                await check_accounts_status(script_dir, forward_py_path)
-            elif choice == 2:
-                await reauthorize_accounts_menu(script_dir, forward_py_path)
-            elif choice == 3:
-                await add_account(script_dir, forward_py_path)
-            elif choice == 4:
-                await delete_account(script_dir, forward_py_path)
-            elif choice == 0:
-                return
+        if choice == "a":
+            await add_account(script_dir, forward_py_path)
+        elif choice == "c":
+            await delete_account(script_dir, forward_py_path)
+        elif choice == "r":
+            await reauthorize_accounts_menu(script_dir, forward_py_path)
+        elif choice == "0":
+            return
+        elif choice.isdigit() and int(choice) > 0 and accounts and int(choice) <= len(accounts):
+            # 选择了一个小号，显示详细信息
+            idx = int(choice) - 1
+            account = accounts[idx]
+            result = results[idx] if idx < len(results) else {}
+
+            print_colored(f"=== 小号 {int(choice)} 详细信息 ===", YELLOW)
+            print(f"API ID: {account['api_id']}")
+            print(f"会话名: {account['session']}")
+
+            status = result.get("status", "unknown")
+            username = result.get("username", "")
+            first_name = result.get("first_name", "")
+            phone = result.get("phone", "")
+
+            if username:
+                print(f"用户名: @{username}")
+            if first_name:
+                print(f"昵称: {first_name}")
+            if phone:
+                print(f"电话: {phone}")
+
+            if status == "ok":
+                print_colored(f"状态: 正常", GREEN)
             else:
-                print_colored("无效选项，请重试！", RED)
-        except ValueError:
-            print_colored("无效输入，请输入数字", RED)
+                message = result.get("message", "未知错误")
+                print_colored(f"状态: 异常 ({message})", RED)
+
+            print_colored("----------------", YELLOW)
+            print("r. 重新授权此小号")
+            print("c. 删除此小号")
+            print("0. 返回上级菜单")
+
+            sub_choice = input("请选择操作: ").strip().lower()
+            if sub_choice == "r":
+                # 重新授权此小号
+                await reauthorize_account(script_dir, account['session'], account['api_id'], account['api_hash'])
+                # 询问是否重启脚本
+                restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
+                if restart == "" or restart == "y":
+                    restart_script(script_dir)
+            elif sub_choice == "c":
+                # 删除此小号
+                session_file = account['session'] + ".session"
+
+                # 删除会话文件
+                if os.path.exists(session_file):
+                    os.remove(session_file)
+                    print_colored(f"已删除会话文件: {session_file}", GREEN)
+
+                # 删除会话日志文件
+                session_journal = session_file + "-journal"
+                if os.path.exists(session_journal):
+                    os.remove(session_journal)
+                    print_colored(f"已删除会话日志文件: {session_journal}", GREEN)
+
+                # 从账号列表中移除
+                accounts.pop(idx)
+
+                # 读取 forward.py 文件
+                with open(forward_py_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # 找到 accounts 数组的开始和结束位置
+                accounts_start = content.find("accounts = [") + len("accounts = [")
+                accounts_end = content.find("]", accounts_start)
+
+                # 构建新的账号数组
+                new_accounts_str = "\n"
+                for acc in accounts:
+                    new_accounts_str += f"""    {{
+        'api_id': '{acc['api_id']}',
+        'api_hash': '{acc['api_hash']}',
+        'session': '{acc['session']}'
+    }},\n"""
+
+                # 替换账号数组
+                new_content = content[:accounts_start] + new_accounts_str + content[accounts_end:]
+
+                # 写回文件
+                with open(forward_py_path, 'w', encoding='utf-8') as f:
+                    f.write(new_content)
+
+                print_colored(f"小号 {int(choice)} 已成功删除！", GREEN)
+
+                # 询问是否重启脚本
+                restart = input(f"{YELLOW}是否立即重启转发脚本以应用更改？(y/n，默认y): {NC}").strip().lower()
+                if restart == "" or restart == "y":
+                    restart_script(script_dir)
+        else:
+            print_colored("无效选项，请重试！", RED)
 
 async def check_accounts_status(script_dir, forward_py_path):
     """检查所有小号状态"""

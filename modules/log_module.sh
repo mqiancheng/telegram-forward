@@ -9,7 +9,7 @@ NC='\033[0m' # No Color
 # 查看日志
 view_log() {
     if [ -f "$LOG_FILE" ]; then
-        echo -e "${YELLOW}正在查看日志（按 q 退出）...${NC}"
+        echo -e "${YELLOW}正在查看日志（按 q 退出查看日志）...${NC}"
         less $LOG_FILE
         echo -e "${GREEN}日志查看完成！${NC}"
     else
@@ -24,7 +24,7 @@ configure_logrotate() {
     # 检查 logrotate 是否已安装
     if ! command -v logrotate &> /dev/null; then
         echo -e "${YELLOW}logrotate 未安装，正在安装...${NC}"
-        
+
         # 根据系统类型安装 logrotate
         if [ "$OS_TYPE" = "alpine" ]; then
             apk add --no-cache logrotate
@@ -37,7 +37,7 @@ configure_logrotate() {
             echo -e "${RED}不支持的系统类型: $OS_TYPE${NC}"
             return 1
         fi
-        
+
         if [ $? -ne 0 ]; then
             echo -e "${RED}安装 logrotate 失败${NC}"
             return 1
@@ -46,7 +46,7 @@ configure_logrotate() {
 
     # 创建 logrotate 配置文件
     LOGROTATE_CONF="/etc/logrotate.d/telegram_forward"
-    
+
     # 检查是否有权限写入 /etc/logrotate.d/
     if [ -w "/etc/logrotate.d/" ]; then
         cat > "$LOGROTATE_CONF" << EOL
@@ -62,7 +62,7 @@ EOL
         echo -e "${GREEN}已配置 logrotate${NC}"
     else
         echo -e "${YELLOW}无权限写入 logrotate 配置，尝试使用 sudo${NC}"
-        
+
         # 使用 sudo 创建配置文件
         cat > /tmp/telegram_forward_logrotate << EOL
 $LOG_FILE {
@@ -74,9 +74,9 @@ $LOG_FILE {
     create 0644 $(whoami) $(id -gn)
 }
 EOL
-        
+
         sudo mv /tmp/telegram_forward_logrotate "$LOGROTATE_CONF" 2>/dev/null
-        
+
         if [ $? -eq 0 ]; then
             echo -e "${GREEN}已配置 logrotate${NC}"
         else
@@ -90,7 +90,7 @@ EOL
 # 清理日志
 clean_logs() {
     echo -e "${YELLOW}正在清理日志...${NC}"
-    
+
     if [ -f "$LOG_FILE" ]; then
         # 询问是否备份当前日志
         echo -e "${YELLOW}是否备份当前日志？(y/n，默认y): ${NC}"
@@ -101,7 +101,7 @@ clean_logs() {
             cp "$LOG_FILE" "$log_backup"
             echo -e "${GREEN}已备份日志到 $log_backup${NC}"
         fi
-        
+
         # 清空日志文件
         > "$LOG_FILE"
         echo -e "${GREEN}已清空日志文件${NC}"
@@ -114,13 +114,13 @@ clean_logs() {
 log_management_menu() {
     while true; do
         echo -e "${YELLOW}=== 日志管理菜单 ===${NC}"
-        echo "1. 查看日志"
+        echo "1. 查看日志（按q退出查看日志）"
         echo "2. 配置日志轮转"
         echo "3. 清理日志"
         echo "0. 返回主菜单"
         echo -e "${YELLOW}请选择一个选项：${NC}"
         read choice
-        
+
         case $choice in
             1)
                 view_log
