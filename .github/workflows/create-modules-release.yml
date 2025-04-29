@@ -1,0 +1,46 @@
+name: Create Modules Release
+
+on:
+  push:
+    branches:
+      - test
+    paths:
+      - 'modules/**'
+      - 'telegram_forward_v2.sh'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Get version
+        id: get_version
+        run: |
+          VERSION=$(grep -oP 'SCRIPT_VERSION="\K[^"]+' telegram_forward_v2.sh)
+          echo "::set-output name=version::$VERSION"
+          echo "Version: $VERSION"
+
+      - name: Create modules package
+        run: |
+          mkdir -p /tmp/telegram-forward-modules
+          cp -r modules/* /tmp/telegram-forward-modules/
+          cd /tmp
+          tar -czf telegram-forward-modules.tar.gz telegram-forward-modules
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.get_version.outputs.version }}-modules
+          name: Telegram Forward Modules v${{ steps.get_version.outputs.version }}
+          body: |
+            包含所有Telegram Forward脚本的模块文件，用于简化安装过程并避免GitHub API限制。
+            
+            此Release由GitHub Actions自动创建，基于test分支的最新代码。
+          files: /tmp/telegram-forward-modules.tar.gz
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
