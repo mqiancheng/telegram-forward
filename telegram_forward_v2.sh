@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="2.0.9"
+SCRIPT_VERSION="2.0.7"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
