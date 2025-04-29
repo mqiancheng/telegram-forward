@@ -45,13 +45,13 @@ show_welcome() {
 load_module() {
     local module_name="$1"
     local module_path="$MODULES_DIR/${module_name}.sh"
-    
+
     # 检查模块文件是否存在
     if [ ! -f "$module_path" ]; then
         echo -e "${RED}错误：模块 $module_name 不存在！${NC}"
         return 1
     fi
-    
+
     # 加载模块
     source "$module_path" 2>/dev/null
 }
@@ -73,22 +73,29 @@ download_all_modules() {
         "uninstall_module"  # 卸载模块
     )
 
-    # 顺序下载所有模块
-    for module in "${all_modules[@]}"; do
-        # 检查模块文件是否存在且非空
-        if [ ! -f "$MODULES_DIR/${module}.sh" ] || [ ! -s "$MODULES_DIR/${module}.sh" ]; then
-            # 尝试从test分支下载
-            curl -fsSL "$GITHUB_RAW_URL/modules/${module}.sh" -o "$MODULES_DIR/${module}.sh"
+    # 首先尝试下载模块包
+    download_modules_package
 
-            # 如果下载失败，尝试从main分支下载
-            if [ $? -ne 0 ] || [ ! -s "$MODULES_DIR/${module}.sh" ]; then
-                curl -fsSL "https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/modules/${module}.sh" -o "$MODULES_DIR/${module}.sh"
+    # 如果模块包下载失败，则尝试单独下载每个模块
+    if [ $? -ne 0 ]; then
+        echo -e "${YELLOW}尝试单独下载模块...${NC}"
+        # 顺序下载所有模块
+        for module in "${all_modules[@]}"; do
+            # 检查模块文件是否存在且非空
+            if [ ! -f "$MODULES_DIR/${module}.sh" ] || [ ! -s "$MODULES_DIR/${module}.sh" ]; then
+                # 尝试从test分支下载
+                curl -fsSL "$GITHUB_RAW_URL/modules/${module}.sh" -o "$MODULES_DIR/${module}.sh" 2>/dev/null
+
+                # 如果下载失败，尝试从main分支下载
+                if [ $? -ne 0 ] || [ ! -s "$MODULES_DIR/${module}.sh" ]; then
+                    curl -fsSL "https://raw.githubusercontent.com/mqiancheng/telegram-forward/main/modules/${module}.sh" -o "$MODULES_DIR/${module}.sh" 2>/dev/null
+                fi
+
+                # 设置执行权限
+                chmod +x "$MODULES_DIR/${module}.sh" 2>/dev/null
             fi
-
-            # 设置执行权限
-            chmod +x "$MODULES_DIR/${module}.sh"
-        fi
-    done
+        done
+    fi
 
     # 按顺序加载所有模块（确保依赖关系正确）
     for module in "${all_modules[@]}"; do
@@ -130,7 +137,37 @@ download_all_modules() {
     fi
 }
 
-# 此函数已被删除，所有模块在启动时一次性下载
+# 下载并安装模块包
+download_modules_package() {
+    echo -e "${YELLOW}尝试下载模块包...${NC}"
+
+    # 模块包的 URL
+    local package_url="https://github.com/mqiancheng/telegram-forward/releases/download/v$SCRIPT_VERSION-modules/telegram-forward-modules.tar.gz"
+    local package_file="$SCRIPT_DIR/modules.tar.gz"
+
+    # 下载模块包
+    curl -fsSL "$package_url" -o "$package_file" 2>/dev/null
+
+    # 检查下载是否成功
+    if [ $? -eq 0 ] && [ -s "$package_file" ]; then
+        echo -e "${GREEN}模块包下载成功${NC}"
+
+        # 解压模块包
+        mkdir -p "$MODULES_DIR"
+        tar -xzf "$package_file" -C "$SCRIPT_DIR" --strip-components=1 telegram-forward-modules 2>/dev/null
+
+        # 设置执行权限
+        chmod +x "$MODULES_DIR"/*.sh 2>/dev/null
+
+        # 删除临时文件
+        rm -f "$package_file"
+
+        return 0
+    else
+        echo -e "${YELLOW}模块包下载失败，将尝试单独下载模块...${NC}"
+        return 1
+    fi
+}
 
 # 检查脚本状态
 check_script_status() {
