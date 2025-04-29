@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="1.7.3"
+SCRIPT_VERSION="1.7.4"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -397,6 +397,94 @@ start_script() {
         echo -e "${YELLOW}正在启动转发脚本...${NC}"
     fi
 
+    # 检查启动脚本是否存在
+    if [ ! -f "$SCRIPT_DIR/bin/run_forward.sh" ]; then
+        if [ "$silent_mode" != "true" ]; then
+            echo -e "${RED}找不到启动脚本，正在重新创建...${NC}"
+        fi
+
+        # 创建目录
+        mkdir -p "$SCRIPT_DIR/bin"
+
+        # 创建启动脚本
+        cat > "$SCRIPT_DIR/bin/run_forward.sh" << EOL
+#!/bin/sh
+# 自动生成的启动脚本
+cd "$SCRIPT_DIR"
+source "$VENV_DIR/bin/activate"
+
+# 启动脚本并保存PID
+start_script() {
+    python "$FORWARD_PY" >> "$LOG_FILE" 2>&1 &
+    echo \$! > "$SCRIPT_DIR/forward.pid"
+    echo "转发脚本已启动，PID: \$(cat "$SCRIPT_DIR/forward.pid")"
+}
+
+# 检查脚本是否在运行
+check_script() {
+    if [ -f "$SCRIPT_DIR/forward.pid" ]; then
+        pid=\$(cat "$SCRIPT_DIR/forward.pid")
+        if ps -p \$pid > /dev/null; then
+            return 0  # 脚本正在运行
+        fi
+    fi
+    return 1  # 脚本未运行
+}
+
+# 启动脚本
+start_script
+
+# 启动监控进程，如果脚本停止则自动重启
+(
+    while true; do
+        sleep 30
+        if ! check_script; then
+            echo "\$(date): 检测到脚本已停止，正在重启..." >> "$LOG_FILE"
+            start_script
+        fi
+    done
+) &
+echo \$! > "$SCRIPT_DIR/monitor.pid"
+EOL
+        chmod +x "$SCRIPT_DIR/bin/run_forward.sh"
+
+        # 创建停止脚本
+        cat > "$SCRIPT_DIR/bin/stop_forward.sh" << EOL
+#!/bin/sh
+# 自动生成的停止脚本
+# 停止监控进程
+if [ -f "$SCRIPT_DIR/monitor.pid" ]; then
+    pid=\$(cat "$SCRIPT_DIR/monitor.pid")
+    if ps -p \$pid > /dev/null; then
+        kill \$pid
+        echo "已停止监控进程，PID: \$pid"
+    fi
+    rm -f "$SCRIPT_DIR/monitor.pid"
+fi
+
+# 停止主脚本
+if [ -f "$SCRIPT_DIR/forward.pid" ]; then
+    pid=\$(cat "$SCRIPT_DIR/forward.pid")
+    if ps -p \$pid > /dev/null; then
+        kill \$pid
+        echo "已停止转发脚本，PID: \$pid"
+    else
+        echo "转发脚本未运行"
+    fi
+    rm -f "$SCRIPT_DIR/forward.pid"
+else
+    echo "找不到 PID 文件，尝试查找并终止进程..."
+    pkill -f "python.*forward.py"
+fi
+EOL
+        chmod +x "$SCRIPT_DIR/bin/stop_forward.sh"
+
+        if [ "$silent_mode" != "true" ]; then
+            echo -e "${GREEN}启动和停止脚本已创建${NC}"
+        fi
+    fi
+
+    # 执行启动脚本
     if [ -f "$SCRIPT_DIR/bin/run_forward.sh" ]; then
         if [ "$silent_mode" = "true" ]; then
             $SCRIPT_DIR/bin/run_forward.sh > /dev/null 2>&1
@@ -406,10 +494,22 @@ start_script() {
         sleep 2
 
         # 检查脚本是否成功启动
-        if [ -f "$SCRIPT_DIR/forward.pid" ] && ps -p $(cat "$SCRIPT_DIR/forward.pid") > /dev/null; then
-            if [ "$silent_mode" != "true" ]; then
-                echo -e "${GREEN}脚本已成功启动！${NC}"
+        if [ -f "$SCRIPT_DIR/forward.pid" ]; then
+            pid=$(cat "$SCRIPT_DIR/forward.pid" 2>/dev/null)
+            if [ -n "$pid" ] && ps -p $pid > /dev/null 2>&1; then
+                if [ "$silent_mode" != "true" ]; then
+                    echo -e "${GREEN}脚本已成功启动！${NC}"
+                fi
+                return 0
             fi
+        fi
+
+        # 如果没有PID文件或进程不存在，尝试直接检查进程
+        if pgrep -f "python.*forward.py" > /dev/null; then
+            if [ "$silent_mode" != "true" ]; then
+                echo -e "${GREEN}脚本已成功启动！（无PID文件）${NC}"
+            fi
+            return 0
         else
             if [ "$silent_mode" != "true" ]; then
                 echo -e "${RED}脚本启动失败，请检查日志${NC}"
@@ -427,8 +527,6 @@ start_script() {
         fi
         return 1
     fi
-
-    return 0
 }
 
 # 停止脚本
@@ -490,10 +588,25 @@ stop_script() {
 
 # 重启脚本
 restart_script() {
+    echo -e "${YELLOW}正在重启脚本...${NC}"
+
     # 先停止脚本
     stop_script
+
+    # 等待一下，确保所有进程都已停止
+    sleep 2
+
     # 再启动脚本
     start_script
+
+    # 检查脚本是否成功启动
+    if pgrep -f "python.*forward.py" > /dev/null; then
+        echo -e "${GREEN}脚本已成功重启！${NC}"
+        return 0
+    else
+        echo -e "${RED}脚本重启失败，请检查日志${NC}"
+        return 1
+    fi
 }
 
 # 查看日志
@@ -1003,10 +1116,10 @@ while true; do
                 echo -e "${YELLOW}正在自动进入配置管理菜单...${NC}"
                 config_management_menu
             else
-                stop_script
-                if [ $? -eq 0 ]; then
-                    start_script
-                fi
+                # 使用 restart_script 函数重启脚本
+                restart_script
+                # 无论成功与否，都返回主菜单
+                sleep 1
             fi
             ;;
         7)

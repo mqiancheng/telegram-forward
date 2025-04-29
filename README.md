@@ -1,7 +1,7 @@
 # Telegram 消息转发管理工具 🚀
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Version](https://img.shields.io/badge/version-1.7.3-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-1.7.4-brightgreen.svg)
 ![Platform](https://img.shields.io/badge/platform-Linux-green.svg)
 
 这是一个用于管理 Telegram 消息转发的 Bash 脚本，支持多账号私聊消息实时转发到指定群组。通过交互式菜单，你可以轻松安装依赖、配置脚本、启动/停止脚本、查看日志等。
@@ -42,7 +42,7 @@
 
 ```plaintext
 === Telegram 消息转发管理工具 ===
-版本: 1.7.3
+版本: 1.7.4
 --- 当前状态 ---
 脚本未运行
 虚拟环境已创建
@@ -215,6 +215,13 @@
    ```
 
 ## 🔄 更新日志
+
+### 版本 1.7.4
+- 修复共享库中的重启脚本功能
+- 改进 `start_script` 函数，添加自动创建启动脚本的功能
+- 增强 `restart_script` 函数，添加更多的错误处理和日志输出
+- 解决重启脚本时卡在"正在启动服务..."界面的问题
+- 提高脚本启动和重启的可靠性
 
 ### 版本 1.7.3
 - 修复共享库 `utils.py` 的下载和使用问题
