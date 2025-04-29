@@ -25,7 +25,7 @@ SELF_SCRIPT="$0" # 当前脚本路径
 CONFIG_FILE="$SCRIPT_DIR/.telegram_forward.conf"
 BACKUP_DIR="/home/backup-TGfw" # 备份目录
 MODULES_DIR="$SCRIPT_DIR/modules" # 模块目录
-GITHUB_RAW_URL="https://raw.githubusercontent.com/mqiancheng/telegram-forward/main"
+GITHUB_RAW_URL="https://raw.githubusercontent.com/mqiancheng/telegram-forward/test"
 
 # 检测系统类型
 if [ -f "/etc/os-release" ]; then
