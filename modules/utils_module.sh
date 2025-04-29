@@ -61,7 +61,7 @@ download_utils() {
 download_python_module() {
     local module_name="$1"
     local module_url="$2"
-    
+
     # 检查模块是否存在
     if [ ! -f "$SCRIPT_DIR/$module_name.py" ]; then
         echo -e "${YELLOW}正在下载 $module_name 模块...${NC}"
@@ -107,18 +107,43 @@ show_system_info() {
 confirm_action() {
     local message="$1"
     local default="$2"
-    
+
     echo -e "${YELLOW}$message${NC}"
     read confirm
-    
+
     # 如果用户直接按回车，使用默认值
     if [ -z "$confirm" ]; then
         confirm="$default"
     fi
-    
+
     if [ "$confirm" = "y" ]; then
         return 0
     else
         return 1
     fi
+}
+
+# 配置更改后处理脚本启动/重启
+handle_config_change() {
+    echo -e "${YELLOW}是否立即启动转发脚本使配置生效? (y/n, 默认y): ${NC}"
+    read -r choice
+
+    case "${choice:-y}" in
+        [Yy]*)
+            # 检查脚本是否已经在运行
+            if check_script_status > /dev/null; then
+                echo -e "${YELLOW}转发脚本当前正在运行，正在重启...${NC}"
+                restart_script
+            else
+                echo -e "${YELLOW}转发脚本当前未运行，正在启动...${NC}"
+                start_script
+            fi
+            ;;
+        [Nn]*)
+            echo -e "${YELLOW}配置已保存，但未应用。您可以稍后手动启动脚本。${NC}"
+            ;;
+        *)
+            echo -e "${RED}无效选项，配置已保存但未应用。${NC}"
+            ;;
+    esac
 }

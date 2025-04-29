@@ -175,8 +175,19 @@ manage_accounts() {
     # 运行小号管理工具
     python3 "$SCRIPT_DIR/account_manager.py" --script-dir "$SCRIPT_DIR"
 
+    # 保存返回值
+    local result=$?
+
     # 退出虚拟环境
     deactivate
+
+    # 如果小号状态有更改（返回值为0表示成功且有更改），询问是否启动/重启脚本
+    if [ $result -eq 0 ] && [ -f "$FORWARD_PY" ]; then
+        # 调用处理配置更改的函数
+        handle_config_change
+    fi
+
+    return $result
 }
 
 # 配置管理菜单
@@ -208,8 +219,19 @@ config_management_menu() {
     # 运行配置管理工具的菜单
     python3 "$SCRIPT_DIR/config_manager.py" --script-dir "$SCRIPT_DIR" --backup-dir "$BACKUP_DIR"
 
+    # 保存返回值
+    local result=$?
+
     # 退出虚拟环境
     deactivate
+
+    # 如果配置有更改（返回值为0表示成功且有更改），询问是否启动/重启脚本
+    if [ $result -eq 0 ] && [ -f "$FORWARD_PY" ]; then
+        # 调用处理配置更改的函数
+        handle_config_change
+    fi
+
+    return $result
 }
 
 # 显示系统信息

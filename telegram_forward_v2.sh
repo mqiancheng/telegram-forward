@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 脚本版本号
-SCRIPT_VERSION="2.0.3"
+SCRIPT_VERSION="2.0.7"
 
 # 检测当前用户的主目录
 if [ "$HOME" = "/root" ]; then
@@ -83,17 +83,17 @@ load_module() {
 download_all_modules() {
     echo -e "${YELLOW}正在下载模块...${NC}"
 
-    # 定义所有模块列表
+    # 定义所有模块列表（按依赖顺序排列）
     local all_modules=(
-        "utils_module"
-        "status_module"
-        "process_module"
-        "config_interface"
-        "menu_module"
-        "install_module"
-        "log_module"
-        "backup_module"
-        "uninstall_module"
+        "utils_module"      # 基础工具模块，应该最先加载
+        "status_module"     # 状态检查模块
+        "process_module"    # 进程管理模块
+        "config_interface"  # 配置管理模块
+        "menu_module"       # 菜单模块
+        "install_module"    # 安装模块
+        "log_module"        # 日志模块
+        "backup_module"     # 备份模块
+        "uninstall_module"  # 卸载模块
     )
 
     # 顺序下载所有模块
@@ -113,7 +113,7 @@ download_all_modules() {
         fi
     done
 
-    # 加载所有模块
+    # 按顺序加载所有模块（确保依赖关系正确）
     for module in "${all_modules[@]}"; do
         if [ -f "$MODULES_DIR/${module}.sh" ]; then
             source "$MODULES_DIR/${module}.sh"
@@ -124,6 +124,11 @@ download_all_modules() {
     local missing_functions=0
 
     # 检查关键函数
+    if ! type handle_config_change >/dev/null 2>&1; then
+        echo -e "${RED}错误：handle_config_change 函数未定义${NC}"
+        missing_functions=$((missing_functions+1))
+    fi
+
     if ! type config_management_menu >/dev/null 2>&1; then
         echo -e "${RED}错误：config_management_menu 函数未定义${NC}"
         missing_functions=$((missing_functions+1))
@@ -160,6 +165,8 @@ check_script_status() {
         return 1
     fi
 }
+
+# 此函数已移至 utils_module.sh
 
 # 检查虚拟环境状态
 check_venv_status() {
