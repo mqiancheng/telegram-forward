@@ -4,12 +4,46 @@ import sys
 import subprocess
 import re
 import json
+import time
+import logging
+import hashlib
+import base64
+from datetime import datetime
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 # 颜色代码
 GREEN = '\033[0;32m'
 RED = '\033[0;31m'
 YELLOW = '\033[1;33m'
+BLUE = '\033[0;34m'
+MAGENTA = '\033[0;35m'
+CYAN = '\033[0;36m'
 NC = '\033[0m'  # No Color
+
+# 版本号
+VERSION = "2.0.0"
+
+# 配置日志
+def setup_logging(log_file=None, level=logging.INFO):
+    """设置日志记录"""
+    if log_file:
+        logging.basicConfig(
+            level=level,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler()
+            ]
+        )
+    else:
+        logging.basicConfig(
+            level=level,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[logging.StreamHandler()]
+        )
+    return logging.getLogger('telegram_forward')
 
 def print_colored(text, color):
     """打印彩色文本"""
@@ -25,6 +59,62 @@ def get_script_dir():
 
     # 设置脚本目录
     return os.path.join(user_home, ".telegram_forward")
+
+def get_backup_dir():
+    """获取备份目录"""
+    return "/home/backup-TGfw"
+
+def encrypt_api_credentials(api_id, api_hash, password=None):
+    """加密API凭证"""
+    if not password:
+        # 使用默认密钥
+        password = "telegram_forward_default_key"
+
+    # 生成密钥
+    salt = b'telegram_forward_salt'
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
+    cipher = Fernet(key)
+
+    # 加密数据
+    data = f"{api_id}:{api_hash}".encode()
+    encrypted_data = cipher.encrypt(data)
+
+    return base64.urlsafe_b64encode(encrypted_data).decode()
+
+def decrypt_api_credentials(encrypted_data, password=None):
+    """解密API凭证"""
+    if not password:
+        # 使用默认密钥
+        password = "telegram_forward_default_key"
+
+    try:
+        # 生成密钥
+        salt = b'telegram_forward_salt'
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=100000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
+        cipher = Fernet(key)
+
+        # 解密数据
+        encrypted_bytes = base64.urlsafe_b64decode(encrypted_data)
+        decrypted_data = cipher.decrypt(encrypted_bytes).decode()
+
+        # 分割数据
+        api_id, api_hash = decrypted_data.split(':')
+        return api_id, api_hash
+    except Exception as e:
+        print_colored(f"解密API凭证时出错: {e}", RED)
+        return None, None
 
 def is_script_running(script_dir):
     """检查脚本是否正在运行"""
@@ -280,3 +370,139 @@ def edit_config_file(forward_py_path):
     else:
         print_colored("forward.py 文件不存在，请先创建配置", RED)
         return False
+
+def get_config_value(forward_py_path, key):
+    """从配置文件中获取指定键的值"""
+    if not os.path.exists(forward_py_path):
+        return None
+
+    try:
+        with open(forward_py_path, 'r') as f:
+            content = f.read()
+
+        # 使用正则表达式查找键值对
+        pattern = rf"{key}\s*=\s*(.*)"
+        match = re.search(pattern, content)
+
+        if match:
+            value = match.group(1).strip()
+            # 处理列表类型
+            if value.startswith('[') and value.endswith(']'):
+                # 解析列表内容
+                items = re.findall(r"'([^']*)'", value)
+                return items
+            # 处理字符串类型
+            elif value.startswith("'") and value.endswith("'"):
+                return value[1:-1]
+            # 处理数字类型
+            elif value.isdigit():
+                return int(value)
+            else:
+                return value
+
+        return None
+    except Exception as e:
+        print_colored(f"获取配置值时出错: {e}", RED)
+        return None
+
+def set_config_value(forward_py_path, key, value):
+    """设置配置文件中指定键的值"""
+    if not os.path.exists(forward_py_path):
+        return False
+
+    try:
+        with open(forward_py_path, 'r') as f:
+            content = f.read()
+
+        # 格式化值
+        if isinstance(value, list):
+            # 处理列表类型
+            formatted_value = "[" + ", ".join([f"'{item}'" for item in value]) + "]"
+        elif isinstance(value, str):
+            # 处理字符串类型
+            formatted_value = f"'{value}'"
+        else:
+            # 处理其他类型
+            formatted_value = str(value)
+
+        # 使用正则表达式查找并替换键值对
+        pattern = rf"({key}\s*=\s*).*"
+        replacement = rf"\1{formatted_value}"
+
+        new_content = re.sub(pattern, replacement, content)
+
+        # 如果没有找到键，则添加到文件末尾
+        if new_content == content and key not in content:
+            new_content += f"\n{key} = {formatted_value}\n"
+
+        with open(forward_py_path, 'w') as f:
+            f.write(new_content)
+
+        return True
+    except Exception as e:
+        print_colored(f"设置配置值时出错: {e}", RED)
+        return False
+
+def get_filter_rules(forward_py_path):
+    """获取消息过滤规则"""
+    # 获取白名单规则
+    whitelist = get_config_value(forward_py_path, "whitelist_keywords")
+    # 获取黑名单规则
+    blacklist = get_config_value(forward_py_path, "blacklist_keywords")
+    # 获取过滤模式
+    filter_mode = get_config_value(forward_py_path, "filter_mode")
+
+    return {
+        "whitelist": whitelist or [],
+        "blacklist": blacklist or [],
+        "mode": filter_mode or "none"
+    }
+
+def set_filter_rules(forward_py_path, whitelist=None, blacklist=None, mode=None):
+    """设置消息过滤规则"""
+    success = True
+
+    if whitelist is not None:
+        success = success and set_config_value(forward_py_path, "whitelist_keywords", whitelist)
+
+    if blacklist is not None:
+        success = success and set_config_value(forward_py_path, "blacklist_keywords", blacklist)
+
+    if mode is not None:
+        success = success and set_config_value(forward_py_path, "filter_mode", mode)
+
+    return success
+
+def check_dependencies():
+    """检查依赖是否已安装"""
+    try:
+        # 检查 Python 版本
+        python_version = sys.version_info
+        if python_version.major < 3 or (python_version.major == 3 and python_version.minor < 6):
+            print_colored("警告: 推荐使用 Python 3.6 或更高版本", YELLOW)
+
+        # 尝试导入 Telethon
+        try:
+            import telethon
+            print_colored(f"Telethon 已安装: {telethon.__version__}", GREEN)
+        except ImportError:
+            print_colored("Telethon 未安装", RED)
+            return False
+
+        # 尝试导入加密库
+        try:
+            import cryptography
+            print_colored(f"cryptography 已安装: {cryptography.__version__}", GREEN)
+        except ImportError:
+            print_colored("cryptography 未安装，API 加密功能将不可用", YELLOW)
+
+        return True
+    except Exception as e:
+        print_colored(f"检查依赖时出错: {e}", RED)
+        return False
+
+def generate_web_token():
+    """生成用于Web界面的访问令牌"""
+    # 生成随机令牌
+    token = hashlib.sha256(os.urandom(32)).hexdigest()
+    return token

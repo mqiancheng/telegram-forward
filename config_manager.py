@@ -296,9 +296,52 @@ async def create_new_config(script_dir):
         senders = input().strip().split()
         allowed_senders = senders
 
+    # 询问是否启用MCP服务
+    print_colored("=== 第四步：配置MCP服务 ===", YELLOW)
+    print_colored("是否启用MCP服务（消息控制协议）？（y/n，回车默认为 y）：", YELLOW)
+    print_colored("MCP服务允许通过命令控制转发行为，如暂停/恢复转发、设置过滤规则等", YELLOW)
+    enable_mcp = input().strip().lower()
+    if not enable_mcp:
+        enable_mcp = 'y'
+
+    mcp_admin_users = []
+    if enable_mcp == 'y':
+        print_colored("请输入MCP管理员用户ID（数字ID），多个用户用空格分隔：", YELLOW)
+        print_colored("（只有这些用户可以发送控制命令，留空则不设置管理员）", YELLOW)
+        admin_input = input().strip()
+        if admin_input:
+            try:
+                mcp_admin_users = [int(user_id) for user_id in admin_input.split()]
+            except ValueError:
+                print_colored("警告：输入的用户ID不是有效的数字，已忽略", RED)
+                mcp_admin_users = []
+
     # 创建 forward.py
     forward_py_content = f"""from telethon import TelegramClient, events
 import asyncio
+import re
+import logging
+import os
+import sys
+
+# 添加当前目录到路径，以便导入mcp_service
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+# 导入MCP服务
+try:
+    from mcp_service import MCPService
+except ImportError:
+    print("警告: 无法导入MCP服务模块，MCP功能将被禁用")
+    MCPService = None
+
+# 配置日志
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger('telegram_forward')
 
 # 大号的 Chat ID（消息的目标）
 target_chat_id = {target_chat_id}
