@@ -1,0 +1,14 @@
+# 使用前请将 <your-username> 替换为你的 GitHub 用户名
+# 或直接在 .env 文件中设置 IMAGE_NAME
+
+services:
+  tg-forward:
+    image: ghcr.io/<your-username>/tg-forward:latest
+    container_name: tg-forward
+    restart: unless-stopped
+    ports:
+      - "44000:44000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - TZ=Asia/Shanghai
