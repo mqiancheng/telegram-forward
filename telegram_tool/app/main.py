@@ -184,7 +184,7 @@ async def api_send_code(account_id: int, data: LoginCodeRequest, db: Session = D
     if not acc:
         raise HTTPException(404, "账号不存在")
 
-    if not client_manager.get_client(account_id):
+    if not client_manager.has_client(account_id):
         await client_manager.start_client(acc)
 
     result = await client_manager.send_login_code(account_id, data.phone)
@@ -202,6 +202,32 @@ async def api_verify_code(account_id: int, data: LoginVerifyRequest, db: Session
     return await client_manager.verify_login_code(
         account_id, data.phone, data.code, data.password
     )
+
+
+# -- QR 码登录 --
+
+@app.post("/api/accounts/{account_id}/qr-start")
+async def api_qr_start(account_id: int, db: Session = Depends(get_db)):
+    """启动 QR 码登录，返回 QR 图片 base64"""
+    acc = db.query(Account).get(account_id)
+    if not acc:
+        raise HTTPException(404, "账号不存在")
+    if not client_manager.has_client(account_id):
+        await client_manager.start_client(acc)
+    return await client_manager.start_qr_login(account_id)
+
+
+@app.get("/api/accounts/{account_id}/qr-status")
+def api_qr_status(account_id: int):
+    """查询 QR 登录状态"""
+    return client_manager.check_qr_login(account_id)
+
+
+@app.post("/api/accounts/{account_id}/qr-cancel")
+def api_qr_cancel(account_id: int):
+    """取消 QR 登录"""
+    client_manager.cancel_qr_login(account_id)
+    return {"message": "已取消"}
 
 
 @app.post("/api/accounts/{account_id}/logout")
@@ -468,6 +494,14 @@ tr:hover td { background: #f0f0ff; }
 .project-meta code { font-size: 12px; color: #667eea; }
 .project-accounts { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 10px; }
 .account-tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; background: #e7f3ff; color: #667eea; }
+.qr-section { text-align: center; padding: 15px 0; }
+.qr-img { width: 200px; height: 200px; border: 1px solid #e0e0e0; border-radius: 10px; }
+.qr-hint { margin-top: 10px; font-size: 13px; color: #888; }
+.qr-status-success { color: #48bb78; font-weight: 600; }
+.qr-status-error { color: #e53e3e; }
+.login-method-bar { display: flex; gap: 8px; margin-bottom: 15px; }
+.login-method-btn { flex: 1; padding: 8px; border: 1px solid #d0d0d0; border-radius: 6px; background: #f5f5f5; cursor: pointer; font-size: 13px; text-align: center; transition: all 0.2s; }
+.login-method-btn.active { background: #667eea; color: white; border-color: #667eea; }
 </style>
 </head>
 <body>
@@ -553,8 +587,35 @@ tr:hover td { background: #f0f0ff; }
             <div class="form-group"><label>API ID *</label><input type="text" v-model="accountModal.form.api_id" placeholder="从 my.telegram.org 获取"></div>
             <div class="form-group"><label>API Hash *</label><input type="text" v-model="accountModal.form.api_hash" placeholder="从 my.telegram.org 获取"></div>
             <div v-if="accountModal.step==='login'">
-                <div class="form-group"><label>手机号（含国家代码）</label><input type="text" v-model="accountModal.loginPhone" placeholder="+8613800138000"></div>
-                <button class="btn btn-primary" @click="sendCode()" :disabled="accountModal.loading"><span v-if="accountModal.loading" class="spinner"></span>发送验证码</button>
+                <div class="login-method-bar">
+                    <div :class="['login-method-btn',accountModal.loginMethod==='code'?'active':'']" @click="accountModal.loginMethod='code'">📱 手机验证码</div>
+                    <div :class="['login-method-btn',accountModal.loginMethod==='qr'?'active':'']" @click="accountModal.loginMethod='qr'">📷 QR 码扫码</div>
+                </div>
+                <div v-if="accountModal.loginMethod==='code'">
+                    <div class="form-group"><label>手机号（含国家代码）</label><input type="text" v-model="accountModal.loginPhone" placeholder="+8613800138000"></div>
+                    <button class="btn btn-primary" @click="sendCode()" :disabled="accountModal.loading"><span v-if="accountModal.loading" class="spinner"></span>发送验证码</button>
+                </div>
+                <div v-if="accountModal.loginMethod==='qr'" class="qr-section">
+                    <div v-if="accountModal.qrStatus==='idle'">
+                        <button class="btn btn-primary" @click="startQrLogin()" :disabled="accountModal.loading"><span v-if="accountModal.loading" class="spinner"></span>生成 QR 码</button>
+                    </div>
+                    <div v-if="accountModal.qrStatus==='waiting'">
+                        <img :src="accountModal.qrImage" class="qr-img" alt="QR Code">
+                        <div class="qr-hint">请用手机 Telegram 扫描上方二维码<br>等待授权中...</div>
+                        <button class="btn btn-outline btn-sm" style="margin-top:10px" @click="cancelQrLogin()" :disabled="accountModal.loading">取消</button>
+                    </div>
+                    <div v-if="accountModal.qrStatus==='success'">
+                        <div class="qr-status-success">✅ 登录成功！</div>
+                    </div>
+                    <div v-if="accountModal.qrStatus==='timeout'||accountModal.qrStatus==='expired'">
+                        <div class="qr-status-error">⚠️ 二维码已过期，请重新生成</div>
+                        <button class="btn btn-outline btn-sm" style="margin-top:10px" @click="accountModal.qrStatus='idle';accountModal.qrPollId=null">重新生成</button>
+                    </div>
+                    <div v-if="accountModal.qrStatus==='error'">
+                        <div class="qr-status-error">❌ 错误: {{accountModal.qrError}}</div>
+                        <button class="btn btn-outline btn-sm" style="margin-top:10px" @click="accountModal.qrStatus='idle';accountModal.qrPollId=null">重试</button>
+                    </div>
+                </div>
             </div>
             <div v-if="accountModal.step==='verify'">
                 <div class="form-group"><label>验证码</label><input type="text" v-model="accountModal.loginCode" placeholder="输入验证码"></div>
@@ -707,7 +768,7 @@ setup(){
     const dash=reactive({account_count:0,account_online:0,project_count:0,project_enabled:0,today_logs:0,forward_enabled:false})
     const recentLogs=ref([])
     const accounts=ref([])
-    const accountModal=reactive({show:false,edit:false,step:'form',error:'',loading:false,form:{name:'',api_id:'',api_hash:''},loginPhone:'',loginCode:'',loginPwd:''})
+    const accountModal=reactive({show:false,edit:false,step:'form',error:'',loading:false,form:{name:'',api_id:'',api_hash:''},loginPhone:'',loginCode:'',loginPwd:'',loginMethod:'code',qrStatus:'idle',qrImage:'',qrError:'',qrPollId:null})
     const fwd=reactive({target_chat_id:'',allowed_senders:'',is_enabled:false})
     const fwdLoading=ref(false),fwdMsg=ref('')
     const projects=ref([])
@@ -746,11 +807,12 @@ setup(){
 
     // 账号
     function showAccountModal(acc){
-        accountModal.show=true;accountModal.step='form';accountModal.error=''
+        accountModal.show=true;accountModal.step='form';accountModal.error='';accountModal.loginMethod='code';accountModal.qrStatus='idle';accountModal.qrImage='';accountModal.qrError='';if(accountModal.qrPollId){clearInterval(accountModal.qrPollId);accountModal.qrPollId=null}
         if(acc){accountModal.edit=true;accountModal.form={name:acc.name,api_id:acc.api_id,api_hash:acc.api_hash};accountModal.editId=acc.id}
         else{accountModal.edit=false;accountModal.form={name:'',api_id:'',api_hash:''};accountModal.editId=null}
     }
-    function closeAccountModal(){accountModal.show=false}
+    function closeAccountModal(){cancelQrLogin();accountModal.show=false}
+    function _resetQrState(){accountModal.qrStatus='idle';accountModal.qrImage='';accountModal.qrError='';if(accountModal.qrPollId){clearInterval(accountModal.qrPollId);accountModal.qrPollId=null}}
     async function saveAccount(){
         accountModal.loading=true;accountModal.error=''
         try{
@@ -770,6 +832,40 @@ setup(){
         try{await axios.post('/api/accounts/'+accountModal.editId+'/verify',{phone:accountModal.loginPhone,code:accountModal.loginCode,password:accountModal.loginPwd});closeAccountModal();loadAccounts();loadDash()}
         catch(e){accountModal.error=errMsg(e)}
         accountModal.loading=false
+    }
+    // QR 码登录
+    async function startQrLogin(){
+        accountModal.loading=true;accountModal.error='';accountModal.qrError=''
+        try{
+            var r=await axios.post('/api/accounts/'+accountModal.editId+'/qr-start')
+            if(r.data.success){
+                accountModal.qrImage=r.data.qr_image;accountModal.qrStatus='waiting'
+                // 每 2 秒轮询一次状态
+                accountModal.qrPollId=setInterval(pollQrLogin,2000)
+            }else{accountModal.qrStatus='error';accountModal.qrError=r.data.error}
+        }catch(e){accountModal.qrStatus='error';accountModal.qrError=errMsg(e)}
+        accountModal.loading=false
+    }
+    async function pollQrLogin(){
+        try{
+            var r=await axios.get('/api/accounts/'+accountModal.editId+'/qr-status')
+            if(r.data.status==='success'){
+                clearInterval(accountModal.qrPollId);accountModal.qrPollId=null
+                accountModal.qrStatus='success'
+                setTimeout(function(){closeAccountModal();loadAccounts();loadDash()},1500)
+            }else if(r.data.status==='timeout'||r.data.status==='expired'){
+                clearInterval(accountModal.qrPollId);accountModal.qrPollId=null
+                accountModal.qrStatus=r.data.status
+            }else if(r.data.status==='error'){
+                clearInterval(accountModal.qrPollId);accountModal.qrPollId=null
+                accountModal.qrStatus='error';accountModal.qrError=r.data.error||''
+            }
+        }catch(e){}
+    }
+    function cancelQrLogin(){
+        if(accountModal.qrPollId){clearInterval(accountModal.qrPollId);accountModal.qrPollId=null}
+        if(accountModal.editId){axios.post('/api/accounts/'+accountModal.editId+'/qr-cancel').catch(function(){})}
+        _resetQrState()
     }
     async function connectAccount(id){try{var r=await axios.post('/api/accounts/'+id+'/connect');alert(r.data.message);loadAccounts();loadDash()}catch(e){alert('连接失败: '+errMsg(e))}}
     async function logoutAccount(id){if(!confirm('确认登出此账号？'))return;await axios.post('/api/accounts/'+id+'/logout');loadAccounts();loadDash()}
@@ -806,7 +902,7 @@ setup(){
 
     return{tab,dash,recentLogs,accounts,accountModal,fwd,fwdLoading,fwdMsg,projects,projectModal,logs,logFilter,
         maskStr,fmtTime,getAccountName,
-        showAccountModal,closeAccountModal,saveAccount,sendCode,verifyCode,connectAccount,logoutAccount,deleteAccount,
+        showAccountModal,closeAccountModal,saveAccount,sendCode,verifyCode,startQrLogin,cancelQrLogin,connectAccount,logoutAccount,deleteAccount,
         saveForward,showProjectModal,closeProjectModal,saveProject,saveAssign,deleteProject,execProject,loadLogs,goPage,clearLogs}
 }
 }).mount('#app')

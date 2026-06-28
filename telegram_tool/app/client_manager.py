@@ -30,6 +30,7 @@ class ClientManager:
         self.clients: dict[int, TelegramClient] = {}       # account_id -> client
         self._bg_tasks: dict[int, asyncio.Task] = {}       # account_id -> background task
         self._pending_logins: dict[int, TelegramClient] = {}  # account_id -> client (登录中)
+        self._qr_logins: dict[int, dict] = {}              # account_id -> qr login state
 
     # ==================== 事件处理器辅助 ====================
 
@@ -60,7 +61,9 @@ class ClientManager:
 
             if not await client.is_user_authorized():
                 logger.warning(f"Account {account.name}: session 未授权（可能已过期或在其他设备登出），需要重新登录")
-                self.clients[account.id] = client
+                # 未授权客户端存入 _pending_logins，不进入 self.clients，
+                # 避免前端误判为"在线"（is_connected 只检查 self.clients）
+                self._pending_logins[account.id] = client
                 # 不在这里修改 is_logged_in，由显式登出或重新登录流程处理
                 return False  # 返回 False 表示需要重新登录
 
@@ -102,7 +105,7 @@ class ClientManager:
             except asyncio.CancelledError:
                 pass
 
-        client = self.clients.pop(account_id, None)
+        client = self.clients.pop(account_id, None) or self._pending_logins.pop(account_id, None)
         if client:
             await client.disconnect()
             logger.info(f"Client stopped: account #{account_id}")
@@ -111,13 +114,15 @@ class ClientManager:
         """停止所有客户端"""
         for aid in list(self.clients.keys()):
             await self.stop_client(aid)
+        for aid in list(self._pending_logins.keys()):
+            await self.stop_client(aid)
         logger.info("All clients stopped")
 
     # ==================== 登录流程 ====================
 
     async def send_login_code(self, account_id: int, phone: str) -> dict:
         """发送登录验证码"""
-        client = self.clients.get(account_id)
+        client = self._pending_logins.get(account_id) or self.clients.get(account_id)
         if not client:
             return {"success": False, "error": "客户端未连接，请先保存账号配置"}
 
@@ -139,7 +144,7 @@ class ClientManager:
         self, account_id: int, phone: str, code: str, password: str = ""
     ) -> dict:
         """验证登录验证码"""
-        client = self.clients.get(account_id)
+        client = self._pending_logins.get(account_id) or self.clients.get(account_id)
         if not client:
             return {"success": False, "error": "客户端不存在"}
 
@@ -160,7 +165,9 @@ class ClientManager:
 
             me = await client.get_me()
             self._update_account_info(account_id, me)
+            # 登录成功：从 pending 移到正式 clients
             self._pending_logins.pop(account_id, None)
+            self.clients[account_id] = client
 
             # 重新设置处理器
             self._remove_all_handlers(client)
@@ -213,6 +220,109 @@ class ClientManager:
         finally:
             db.close()
 
+    # ==================== QR 码登录 ====================
+
+    async def start_qr_login(self, account_id: int) -> dict:
+        """启动 QR 码登录，返回 QR 图片 base64"""
+        client = self._pending_logins.get(account_id)
+        if not client:
+            client = self.clients.get(account_id)
+        if not client:
+            return {"success": False, "error": "客户端未连接，请先保存账号配置"}
+
+        if not client.is_connected():
+            await client.connect()
+
+        try:
+            import qrcode
+            import io
+            import base64
+
+            # 取消已有 QR 登录
+            if account_id in self._qr_logins:
+                old_task = self._qr_logins[account_id].get("task")
+                if old_task:
+                    old_task.cancel()
+
+            # 使用 Telethon 原生 QR 登录
+            qr = await client.qr_login()
+
+            qr_img = qrcode.make(qr.url)
+            buf = io.BytesIO()
+            qr_img.save(buf, format="PNG")
+            buf.seek(0)
+            img_b64 = base64.b64encode(buf.read()).decode()
+
+            # 启动后台任务等待扫码完成
+            task = asyncio.create_task(self._qr_wait(account_id, qr))
+
+            self._qr_logins[account_id] = {
+                "task": task,
+                "status": "waiting",
+                "error": "",
+                "qr": qr,
+            }
+
+            return {
+                "success": True,
+                "qr_image": f"data:image/png;base64,{img_b64}",
+            }
+        except Exception as e:
+            logger.error(f"QR login start failed for account #{account_id}: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _qr_wait(self, account_id: int, qr):
+        """后台等待 QR 码扫码结果（使用 Telethon 原生 QRLogin.wait）"""
+        qr_data = self._qr_logins.get(account_id)
+        if not qr_data:
+            return
+        try:
+            # 使用 QRLogin 原生 wait() 等待扫码（事件驱动，非轮询）
+            user = await qr.wait(timeout=120)
+
+            if user:
+                qr_data["status"] = "success"
+                # 登录完成：从 pending 移到正式 clients
+                client = self._pending_logins.pop(account_id, None)
+                if not client:
+                    client = self.clients.get(account_id)
+                if client:
+                    me = await client.get_me()
+                    self._update_account_info(account_id, me)
+                    self._remove_all_handlers(client)
+                    self._setup_handlers(account_id, client)
+                    self._pending_logins.pop(account_id, None)
+                    self.clients[account_id] = client
+                    old_task = self._bg_tasks.pop(account_id, None)
+                    if old_task:
+                        old_task.cancel()
+                    self._bg_tasks[account_id] = asyncio.create_task(
+                        self._keep_alive(account_id, client)
+                    )
+        except asyncio.TimeoutError:
+            qr_data["status"] = "timeout"
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            qr_data["status"] = "error"
+            qr_data["error"] = str(e)
+            logger.error(f"QR login wait error for account #{account_id}: {e}")
+
+    def check_qr_login(self, account_id: int) -> dict:
+        """查询 QR 登录状态"""
+        if account_id not in self._qr_logins:
+            return {"status": "not_started"}
+        qr_data = self._qr_logins[account_id]
+        return {"status": qr_data["status"], "error": qr_data.get("error", "")}
+
+    def cancel_qr_login(self, account_id: int):
+        """取消 QR 登录"""
+        qr_data = self._qr_logins.pop(account_id, None)
+        if qr_data:
+            task = qr_data.get("task")
+            if task:
+                task.cancel()
+
     # ==================== 消息转发 ====================
 
     def _setup_handlers(self, account_id: int, client: TelegramClient):
@@ -260,6 +370,10 @@ class ClientManager:
 
     def get_client(self, account_id: int) -> Optional[TelegramClient]:
         return self.clients.get(account_id)
+
+    def has_client(self, account_id: int) -> bool:
+        """检查是否有客户端（包括 pending logins）"""
+        return account_id in self.clients or account_id in self._pending_logins
 
     def is_connected(self, account_id: int) -> bool:
         client = self.clients.get(account_id)
