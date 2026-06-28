@@ -545,7 +545,7 @@ tr:hover td { background: #f0f0ff; }
     </div>
 
     <!-- 账号弹窗 -->
-    <div class="modal-overlay" v-if="accountModal.show" @click.self="closeAccountModal()">
+    <div class="modal-overlay" v-if="accountModal.show">
         <div class="modal-content">
             <div class="modal-title">{{accountModal.edit?'编辑账号':'添加账号'}}</div>
             <div class="error" v-if="accountModal.error">{{accountModal.error}}</div>
@@ -620,7 +620,7 @@ tr:hover td { background: #f0f0ff; }
     </div>
 
     <!-- 项目弹窗 -->
-    <div class="modal-overlay" v-if="projectModal.show" @click.self="closeProjectModal()">
+    <div class="modal-overlay" v-if="projectModal.show">
         <div class="modal-content">
             <div class="modal-title">{{projectModal.edit?'编辑':'添加'}}签到项目</div>
             <div class="error" v-if="projectModal.error">{{projectModal.error}}</div>
