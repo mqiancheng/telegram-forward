@@ -270,7 +270,15 @@ class ClientManager:
         client = self.get_client(account_id)
         if not client or not client.is_connected():
             raise RuntimeError(f"Account #{account_id} is not connected")
-        return await client.send_message(target, message)
+
+        # Telethon 要求纯数字ID（如群组 -4688142035）以 int 格式传入，
+        # 否则会当作 username 去搜索，导致 "Cannot find any entity" 错误
+        try:
+            entity = int(target)
+        except ValueError:
+            entity = target  # 保留原始字符串（如 @username）
+
+        return await client.send_message(entity, message)
 
     async def reconnect_all(self):
         """重连所有已激活且已登录的账号（启动时调用）"""

@@ -73,6 +73,7 @@ class ForwardConfigResponse(BaseModel):
 
 class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
+    target_type: str = Field(default="bot", pattern="^(bot|group|channel)$")
     target_bot: str = Field(..., min_length=1, max_length=200)
     message: str = Field(..., min_length=1, max_length=500)
     schedule_type: str = Field(default="cron", pattern="^(cron|interval)$")
@@ -81,6 +82,7 @@ class ProjectCreate(BaseModel):
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=200)
+    target_type: Optional[str] = None
     target_bot: Optional[str] = Field(None, max_length=200)
     message: Optional[str] = Field(None, max_length=500)
     schedule_type: Optional[str] = None
@@ -95,6 +97,7 @@ class ProjectAssignAccounts(BaseModel):
 class ProjectResponse(BaseModel):
     id: int
     name: str
+    target_type: str
     target_bot: str
     message: str
     schedule_type: str

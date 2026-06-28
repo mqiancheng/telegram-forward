@@ -87,6 +87,9 @@ def project_to_dict(p: Project) -> dict:
     d["created_at"] = d["created_at"].isoformat() if d["created_at"] else ""
     d["updated_at"] = d["updated_at"].isoformat() if d["updated_at"] else ""
     d["account_ids"] = [a.id for a in p.accounts]
+    # 兼容旧数据：如果 target_type 为空，默认 bot
+    if not d.get("target_type"):
+        d["target_type"] = "bot"
     return d
 
 
@@ -282,6 +285,7 @@ async def api_create_project(data: ProjectCreate, db: Session = Depends(get_db))
         message=data.message,
         schedule_type=data.schedule_type,
         schedule_rule=data.schedule_rule,
+        target_type=data.target_type,
     )
     db.add(p)
     db.commit()
@@ -295,7 +299,7 @@ async def api_update_project(project_id: int, data: ProjectUpdate, db: Session =
     p = db.query(Project).get(project_id)
     if not p:
         raise HTTPException(404, "项目不存在")
-    for field in ["name", "target_bot", "message", "schedule_type", "schedule_rule", "is_enabled"]:
+    for field in ["name", "target_type", "target_bot", "message", "schedule_type", "schedule_rule", "is_enabled"]:
         val = getattr(data, field, None)
         if val is not None:
             setattr(p, field, val)
@@ -595,7 +599,7 @@ tr:hover td { background: #f0f0ff; }
         <div class="project-cards" v-if="projects.length">
             <div :class="['project-card', p.is_enabled?'enabled':'disabled']" v-for="p in projects" :key="p.id">
                 <div class="project-name">{{p.name}}</div>
-                <div class="project-meta">📨 目标: <code>{{p.target_bot}}</code></div>
+                <div class="project-meta">{{p.target_type==='group'?'👥':'🤖'}} 目标: <code>{{p.target_bot}}</code></div>
                 <div class="project-meta">💬 消息: <code>{{p.message}}</code></div>
                 <div class="project-meta">⏱ 调度: {{p.schedule_type==='cron'?'Cron':'间隔'}} <code>{{p.schedule_rule}}</code></div>
                 <div style="margin-top:6px">
@@ -621,7 +625,14 @@ tr:hover td { background: #f0f0ff; }
             <div class="modal-title">{{projectModal.edit?'编辑':'添加'}}签到项目</div>
             <div class="error" v-if="projectModal.error">{{projectModal.error}}</div>
             <div class="form-group"><label>项目名称 *</label><input type="text" v-model="projectModal.form.name" placeholder="例如：Lamhosting签到"></div>
-            <div class="form-group"><label>目标机器人 *</label><input type="text" v-model="projectModal.form.target_bot" placeholder="@Lamhosting_bot"></div>
+            <div class="form-group"><label>目标类型</label>
+                <select v-model="projectModal.form.target_type">
+                    <option value="bot">🤖 机器人</option>
+                    <option value="group">👥 群组</option>
+                    <option value="channel">📢 频道</option>
+                </select>
+            </div>
+            <div class="form-group"><label>目标 <span class="help-text">{{projectModal.form.target_type==='bot'?'@username':'群组ID 或 @username'}}</span></label><input type="text" v-model="projectModal.form.target_bot" :placeholder="projectModal.form.target_type==='bot'?'@Lamhosting_bot':projectModal.form.target_type==='group'?'@mygroup 或 -1001234567890':'@mychannel'"></div>
             <div class="form-group"><label>发送内容 *</label><input type="text" v-model="projectModal.form.message" placeholder="/check"></div>
             <div class="form-group"><label>调度类型</label>
                 <select v-model="projectModal.form.schedule_type">
@@ -700,7 +711,7 @@ setup(){
     const fwd=reactive({target_chat_id:'',allowed_senders:'',is_enabled:false})
     const fwdLoading=ref(false),fwdMsg=ref('')
     const projects=ref([])
-    const projectModal=reactive({show:false,edit:false,loading:false,error:'',form:{name:'',target_bot:'',message:'',schedule_type:'cron',schedule_rule:'',is_enabled:true},assignIds:[],editId:null})
+    const projectModal=reactive({show:false,edit:false,loading:false,error:'',form:{name:'',target_type:'bot',target_bot:'',message:'',schedule_type:'cron',schedule_rule:'',is_enabled:true},assignIds:[],editId:null})
     const logs=reactive({items:[],total:0,page:1,size:20})
     const logFilter=reactive({status:'',project_id:''})
 
@@ -773,15 +784,15 @@ setup(){
     }
     // 项目
     function showProjectModal(p){
-        projectModal.show=true;projectModal.error='';projectModal.form={name:'',target_bot:'',message:'',schedule_type:'cron',schedule_rule:'',is_enabled:true};projectModal.assignIds=[]
-        if(p){projectModal.edit=true;projectModal.editId=p.id;Object.assign(projectModal.form,{name:p.name,target_bot:p.target_bot,message:p.message,schedule_type:p.schedule_type,schedule_rule:p.schedule_rule,is_enabled:p.is_enabled});projectModal.assignIds=[].concat(p.account_ids)}
+        projectModal.show=true;projectModal.error='';projectModal.form={name:'',target_type:'bot',target_bot:'',message:'',schedule_type:'cron',schedule_rule:'',is_enabled:true};projectModal.assignIds=[]
+        if(p){projectModal.edit=true;projectModal.editId=p.id;Object.assign(projectModal.form,{name:p.name,target_type:p.target_type||'bot',target_bot:p.target_bot,message:p.message,schedule_type:p.schedule_type,schedule_rule:p.schedule_rule,is_enabled:p.is_enabled});projectModal.assignIds=[].concat(p.account_ids)}
         else{projectModal.edit=false;projectModal.editId=null}
     }
     function closeProjectModal(){projectModal.show=false}
     async function saveProject(){
         projectModal.loading=true;projectModal.error=''
         try{
-            var payload=Object.assign({},projectModal.form,{schedule_rule:String(projectModal.form.schedule_rule)})
+            var payload=Object.assign({},projectModal.form,{schedule_rule:String(projectModal.form.schedule_rule),target_type:projectModal.form.target_type})
             if(projectModal.edit){await axios.put('/api/projects/'+projectModal.editId,payload)}
             else{var r=await axios.post('/api/projects',payload);projectModal.editId=r.data.id;projectModal.edit=true}
             closeProjectModal();loadProjects();loadDash()

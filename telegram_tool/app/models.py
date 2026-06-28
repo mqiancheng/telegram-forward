@@ -59,7 +59,8 @@ class Project(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(200), nullable=False, comment="项目名称")
-    target_bot = Column(String(200), nullable=False, comment="目标机器人 @xxx")
+    target_type = Column(String(20), nullable=False, default="bot", comment="bot / group / channel")
+    target_bot = Column(String(200), nullable=False, comment="目标 @username 或 Chat ID")
     message = Column(String(500), nullable=False, comment="发送的消息内容")
     schedule_type = Column(String(20), nullable=False, default="cron", comment="cron / interval")
     schedule_rule = Column(String(100), nullable=False, comment="cron表达式 或 间隔秒数")
