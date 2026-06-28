@@ -12,26 +12,28 @@ from sqlalchemy.orm import Session
 
 try:
     from .database import SessionLocal, init_db, get_db
-    from .models import Account, ForwardConfig, Project, TaskLog
+    from .models import Account, ForwardConfig, Project, TaskLog, SubTask
     from .schemas import (
         AccountCreate, AccountUpdate, AccountResponse,
         LoginCodeRequest, LoginVerifyRequest,
         ForwardConfigRequest, ForwardConfigResponse,
         ProjectCreate, ProjectUpdate, ProjectAssignAccounts, ProjectResponse,
         TaskLogResponse, DashboardResponse,
+        SubTaskCreate, SubTaskUpdate, SubTaskResponse,
     )
     from .client_manager import client_manager
     from .scheduler_service import scheduler_service
     from .config import PORT, HOST
 except ImportError:
     from database import SessionLocal, init_db, get_db
-    from models import Account, ForwardConfig, Project, TaskLog
+    from models import Account, ForwardConfig, Project, TaskLog, SubTask
     from schemas import (
         AccountCreate, AccountUpdate, AccountResponse,
         LoginCodeRequest, LoginVerifyRequest,
         ForwardConfigRequest, ForwardConfigResponse,
         ProjectCreate, ProjectUpdate, ProjectAssignAccounts, ProjectResponse,
         TaskLogResponse, DashboardResponse,
+        SubTaskCreate, SubTaskUpdate, SubTaskResponse,
     )
     from client_manager import client_manager
     from scheduler_service import scheduler_service
@@ -87,6 +89,14 @@ def project_to_dict(p: Project) -> dict:
     d["created_at"] = d["created_at"].isoformat() if d["created_at"] else ""
     d["updated_at"] = d["updated_at"].isoformat() if d["updated_at"] else ""
     d["account_ids"] = [a.id for a in p.accounts]
+    d["subtasks"] = [
+        {
+            "id": s.id, "project_id": s.project_id,
+            "target_type": s.target_type, "target_bot": s.target_bot,
+            "message": s.message, "sort_order": s.sort_order,
+        }
+        for s in (p.subtasks or [])
+    ]
     # 兼容旧数据：如果 target_type 为空，默认 bot
     if not d.get("target_type"):
         d["target_type"] = "bot"
@@ -125,6 +135,7 @@ def api_list_accounts(db: Session = Depends(get_db)):
     for a in accounts:
         d = account_to_dict(a)
         d["is_connected"] = client_manager.is_connected(a.id)
+        d["assigned_projects"] = [{"id": p.id, "name": p.name} for p in a.projects]
         result.append(d)
     return result
 
@@ -299,7 +310,7 @@ async def api_update_forward_config(data: ForwardConfigRequest, db: Session = De
 
 @app.get("/api/projects")
 def api_list_projects(db: Session = Depends(get_db)):
-    projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    projects = db.query(Project).order_by(Project.sort_order, Project.created_at.desc()).all()
     return [project_to_dict(p) for p in projects]
 
 
@@ -312,6 +323,10 @@ async def api_create_project(data: ProjectCreate, db: Session = Depends(get_db))
         schedule_type=data.schedule_type,
         schedule_rule=data.schedule_rule,
         target_type=data.target_type,
+        jitter_min=data.jitter_min,
+        jitter_max=data.jitter_max,
+        account_delay_min=data.account_delay_min,
+        account_delay_max=data.account_delay_max,
     )
     db.add(p)
     db.commit()
@@ -325,7 +340,9 @@ async def api_update_project(project_id: int, data: ProjectUpdate, db: Session =
     p = db.query(Project).get(project_id)
     if not p:
         raise HTTPException(404, "项目不存在")
-    for field in ["name", "target_type", "target_bot", "message", "schedule_type", "schedule_rule", "is_enabled"]:
+    for field in ["name", "target_type", "target_bot", "message", "schedule_type", "schedule_rule",
+                   "is_enabled", "jitter_min", "jitter_max", "account_delay_min", "account_delay_max",
+                   "sort_order"]:
         val = getattr(data, field, None)
         if val is not None:
             setattr(p, field, val)
@@ -333,6 +350,38 @@ async def api_update_project(project_id: int, data: ProjectUpdate, db: Session =
     db.refresh(p)
     scheduler_service.add_job(p)
     return {"message": "项目已更新"}
+
+
+@app.put("/api/projects/{project_id}/accounts")
+def api_assign_accounts(project_id: int, data: ProjectAssignAccounts, db: Session = Depends(get_db)):
+    p = db.query(Project).get(project_id)
+    if not p:
+        raise HTTPException(404, "项目不存在")
+    accounts = db.query(Account).filter(Account.id.in_(data.account_ids)).all()
+    p.accounts = accounts
+    db.commit()
+    return {"message": f"已为项目「{p.name}」分配 {len(accounts)} 个账号"}
+
+
+@app.put("/api/projects/{project_id}/move")
+def api_move_project(project_id: int, direction: str = Query(..., pattern="^(up|down)$"),
+                     db: Session = Depends(get_db)):
+    """上移/下移项目排序"""
+    projects = db.query(Project).order_by(Project.sort_order, Project.id).all()
+    idx = next((i for i, p in enumerate(projects) if p.id == project_id), None)
+    if idx is None:
+        raise HTTPException(404, "项目不存在")
+    if direction == "up" and idx > 0:
+        projects[idx], projects[idx - 1] = projects[idx - 1], projects[idx]
+    elif direction == "down" and idx < len(projects) - 1:
+        projects[idx], projects[idx + 1] = projects[idx + 1], projects[idx]
+    else:
+        return {"message": "无需移动"}
+    # 重新分配 sort_order，确保与列表位置一致
+    for i, p in enumerate(projects):
+        p.sort_order = i
+    db.commit()
+    return {"message": "排序已更新"}
 
 
 @app.delete("/api/projects/{project_id}")
@@ -362,6 +411,63 @@ async def api_execute_project_now(project_id: int):
     """立即手动执行一次项目任务"""
     results = await scheduler_service.execute_now(project_id)
     return {"results": results}
+
+
+# -- 子任务管理 --
+
+@app.get("/api/projects/{project_id}/subtasks")
+def api_list_subtasks(project_id: int, db: Session = Depends(get_db)):
+    """获取项目的所有子任务"""
+    p = db.query(Project).get(project_id)
+    if not p:
+        raise HTTPException(404, "项目不存在")
+    return [
+        {"id": s.id, "project_id": s.project_id, "target_type": s.target_type,
+         "target_bot": s.target_bot, "message": s.message, "sort_order": s.sort_order}
+        for s in p.subtasks
+    ]
+
+
+@app.post("/api/projects/{project_id}/subtasks")
+def api_create_subtask(project_id: int, data: SubTaskCreate, db: Session = Depends(get_db)):
+    """为项目添加子任务"""
+    p = db.query(Project).get(project_id)
+    if not p:
+        raise HTTPException(404, "项目不存在")
+    s = SubTask(
+        project_id=project_id,
+        target_type=data.target_type,
+        target_bot=data.target_bot,
+        message=data.message,
+        sort_order=data.sort_order,
+    )
+    db.add(s)
+    db.commit()
+    db.refresh(s)
+    return {"id": s.id, "message": "子任务已添加"}
+
+
+@app.put("/api/subtasks/{subtask_id}")
+def api_update_subtask(subtask_id: int, data: SubTaskUpdate, db: Session = Depends(get_db)):
+    s = db.query(SubTask).get(subtask_id)
+    if not s:
+        raise HTTPException(404, "子任务不存在")
+    for field in ["target_type", "target_bot", "message", "sort_order"]:
+        val = getattr(data, field, None)
+        if val is not None:
+            setattr(s, field, val)
+    db.commit()
+    return {"message": "子任务已更新"}
+
+
+@app.delete("/api/subtasks/{subtask_id}")
+def api_delete_subtask(subtask_id: int, db: Session = Depends(get_db)):
+    s = db.query(SubTask).get(subtask_id)
+    if not s:
+        raise HTTPException(404, "子任务不存在")
+    db.delete(s)
+    db.commit()
+    return {"message": "子任务已删除"}
 
 
 # -- 日志 --
@@ -502,6 +608,20 @@ tr:hover td { background: #f0f0ff; }
 .login-method-bar { display: flex; gap: 8px; margin-bottom: 15px; }
 .login-method-btn { flex: 1; padding: 8px; border: 1px solid #d0d0d0; border-radius: 6px; background: #f5f5f5; cursor: pointer; font-size: 13px; text-align: center; transition: all 0.2s; }
 .login-method-btn.active { background: #667eea; color: white; border-color: #667eea; }
+
+/* 子任务 & 排序 */
+.section-title { font-size: 14px; font-weight: 600; color: #444; margin: 15px 0 8px; padding-top: 10px; border-top: 1px solid #eee; display: flex; align-items: center; }
+.subtask-list { margin-bottom: 10px; }
+.subtask-item { padding: 6px; margin-bottom: 4px; background: #f5f7fa; border-radius: 6px; }
+.sort-btns { margin-right: 6px; display: inline-flex; flex-direction: column; vertical-align: middle; }
+.btn-icon { background: none; border: 1px solid #ddd; border-radius: 3px; cursor: pointer; padding: 0 4px; font-size: 10px; color: #888; line-height: 16px; }
+.btn-icon:hover:not(:disabled) { background: #667eea; color: white; border-color: #667eea; }
+.btn-icon:disabled { opacity: 0.3; cursor: default; }
+
+/* 账号分配 tooltip */
+.assigned-tooltip { position: relative; cursor: pointer; color: #667eea; text-decoration: underline; text-decoration-style: dotted; }
+.assigned-tooltip .tooltip-popup { visibility: hidden; position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 11px; white-space: nowrap; z-index: 10; margin-bottom: 4px; }
+.assigned-tooltip:hover .tooltip-popup { visibility: visible; }
 </style>
 </head>
 <body>
@@ -554,7 +674,7 @@ tr:hover td { background: #f0f0ff; }
         <div class="card" v-if="accounts.length">
             <div class="card-title">账号列表</div>
             <table>
-                <thead><tr><th>备注</th><th>API ID</th><th>API Hash</th><th>状态</th><th>Telegram</th><th>操作</th></tr></thead>
+                <thead><tr><th>备注</th><th>API ID</th><th>API Hash</th><th>状态</th><th>Telegram</th><th>分配任务</th><th>操作</th></tr></thead>
                 <tbody>
                     <tr v-for="a in accounts" :key="a.id">
                         <td><strong>{{a.name}}</strong></td>
@@ -562,6 +682,13 @@ tr:hover td { background: #f0f0ff; }
                         <td><span class="mask">{{maskStr(a.api_hash)}}</span></td>
                         <td><span :class="['badge', a.is_connected?'badge-success':a.is_logged_in?'badge-warning':'badge-danger']">{{a.is_connected?'在线':a.is_logged_in?'离线':'未登录'}}</span></td>
                         <td>{{a.first_name}}{{a.username?' @'+a.username:''}}</td>
+                        <td>
+                            <span v-if="a.assigned_projects&&a.assigned_projects.length" class="assigned-tooltip">
+                                {{a.assigned_projects.length}} 个
+                                <span class="tooltip-popup">{{a.assigned_projects.map(function(x){return x.name}).join(', ')}}</span>
+                            </span>
+                            <span v-else style="color:#999">-</span>
+                        </td>
                         <td>
                             <div class="flex-row">
                                 <button class="btn btn-outline btn-sm" @click="showAccountModal(a)" v-if="!a.is_logged_in">登录</button>
@@ -658,22 +785,41 @@ tr:hover td { background: #f0f0ff; }
             <button class="btn btn-primary" @click="showProjectModal()">+ 添加项目</button>
         </div>
         <div class="project-cards" v-if="projects.length">
-            <div :class="['project-card', p.is_enabled?'enabled':'disabled']" v-for="p in projects" :key="p.id">
-                <div class="project-name">{{p.name}}</div>
-                <div class="project-meta">{{p.target_type==='group'?'👥':'🤖'}} 目标: <code>{{p.target_bot}}</code></div>
-                <div class="project-meta">💬 消息: <code>{{p.message}}</code></div>
-                <div class="project-meta">⏱ 调度: {{p.schedule_type==='cron'?'Cron':'间隔'}} <code>{{p.schedule_rule}}</code></div>
+            <div :class="['project-card', p.is_enabled?'enabled':'disabled']" v-for="(p,idx) in projects" :key="p.id">
+                <div class="project-name">
+                    <span class="sort-btns">
+                        <button class="btn-icon" title="上移" @click="moveProject(p.id,'up')" :disabled="idx===0">▲</button>
+                        <button class="btn-icon" title="下移" @click="moveProject(p.id,'down')" :disabled="idx===projects.length-1">▼</button>
+                    </span>
+                    {{p.name}}
+                </div>
+                <div class="project-meta" v-if="!p.subtasks.length">{{p.target_type==='group'?'👥':p.target_type==='channel'?'📢':'🤖'}} 目标: <code>{{p.target_bot}}</code></div>
+                <div class="project-meta" v-if="!p.subtasks.length">💬 消息: <code>{{p.message}}</code></div>
+                <div class="project-meta" v-if="p.subtasks.length">
+                    📋 子任务 {{p.subtasks.length}} 个:
+                    <div v-for="s in p.subtasks" :key="s.id" style="margin:2px 0 2px 12px;font-size:12px">
+                        {{s.target_type==='group'?'👥':s.target_type==='channel'?'📢':'🤖'}}
+                        <code>{{s.target_bot}}</code> → <code>{{s.message}}</code>
+                    </div>
+                </div>
+                <div class="project-meta">⏱ 调度: {{p.schedule_type==='cron'?'Cron':'间隔'}} <code>{{p.schedule_type==='cron'?p.schedule_rule:p.schedule_rule+'秒'}}</code></div>
+                <div class="project-meta" v-if="p.jitter_min||p.jitter_max||p.account_delay_min||p.account_delay_max">
+                    🎲 随机延迟:
+                    <span v-if="p.jitter_min||p.jitter_max">任务抖动 {{fmtSec(p.jitter_min)}}~{{fmtSec(p.jitter_max)}}</span>
+                    <span v-if="(p.jitter_min||p.jitter_max)&&(p.account_delay_min||p.account_delay_max)"> | </span>
+                    <span v-if="p.account_delay_min||p.account_delay_max">账号间隔 {{p.account_delay_min}}s~{{p.account_delay_max}}s</span>
+                </div>
                 <div style="margin-top:6px">
-                    <span :class="['badge', p.is_enabled?'badge-success':'badge-warning']" style="margin-right:4px">{{p.is_enabled?'启用中':'已停用'}}</span>
                     <span class="badge badge-info" v-if="p.account_ids.length">{{p.account_ids.length}} 个账号</span>
                 </div>
-                <div class="project-accounts" v-if="p.account_ids.length">
-                    <span class="account-tag" v-for="aid in p.account_ids" :key="aid">{{getAccountName(aid)}}</span>
-                </div>
-                <div class="flex-row" style="margin-top:12px">
+                <div class="flex-row" style="margin-top:12px;flex-wrap:wrap;gap:6px">
+                    <button :class="['btn btn-sm', p.is_enabled?'btn-warning':'btn-success']" @click="toggleProject(p.id)">{{p.is_enabled?'停用':'启用'}}</button>
                     <button class="btn btn-outline btn-sm" @click="showProjectModal(p)">编辑</button>
                     <button class="btn btn-success btn-sm" @click="execProject(p.id)">▶ 测试执行</button>
                     <button class="btn btn-danger btn-sm" @click="deleteProject(p.id)">删除</button>
+                </div>
+                <div class="project-accounts" v-if="p.account_ids.length">
+                    <span class="account-tag" v-for="aid in p.account_ids" :key="aid">{{getAccountName(aid)}}</span>
                 </div>
             </div>
         </div>
@@ -682,19 +828,10 @@ tr:hover td { background: #f0f0ff; }
 
     <!-- 项目弹窗 -->
     <div class="modal-overlay" v-if="projectModal.show">
-        <div class="modal-content">
+        <div class="modal-content" style="max-width:600px;max-height:90vh;overflow-y:auto">
             <div class="modal-title">{{projectModal.edit?'编辑':'添加'}}签到项目</div>
             <div class="error" v-if="projectModal.error">{{projectModal.error}}</div>
             <div class="form-group"><label>项目名称 *</label><input type="text" v-model="projectModal.form.name" placeholder="例如：Lamhosting签到"></div>
-            <div class="form-group"><label>目标类型</label>
-                <select v-model="projectModal.form.target_type">
-                    <option value="bot">🤖 机器人</option>
-                    <option value="group">👥 群组</option>
-                    <option value="channel">📢 频道</option>
-                </select>
-            </div>
-            <div class="form-group"><label>目标 <span class="help-text">{{projectModal.form.target_type==='bot'?'@username':'群组ID 或 @username'}}</span></label><input type="text" v-model="projectModal.form.target_bot" :placeholder="projectModal.form.target_type==='bot'?'@Lamhosting_bot':projectModal.form.target_type==='group'?'@mygroup 或 -1001234567890':'@mychannel'"></div>
-            <div class="form-group"><label>发送内容 *</label><input type="text" v-model="projectModal.form.message" placeholder="/check"></div>
             <div class="form-group"><label>调度类型</label>
                 <select v-model="projectModal.form.schedule_type">
                     <option value="cron">Cron 表达式</option>
@@ -706,20 +843,63 @@ tr:hover td { background: #f0f0ff; }
                 <input type="text" v-model="projectModal.form.schedule_rule" placeholder="0 9 * * *">
             </div>
             <div class="form-group" v-else>
-                <label>间隔秒数 <span class="help-text">例如 450 = 7分30秒</span></label>
-                <input type="number" v-model="projectModal.form.schedule_rule" placeholder="450">
+                <label>间隔秒数 <span class="help-text">例如 3600 = 1小时</span></label>
+                <input type="number" v-model="projectModal.form.schedule_rule" placeholder="3600" min="1">
             </div>
-            <div class="form-group"><label><input type="checkbox" v-model="projectModal.form.is_enabled" style="margin-right:6px">启用</label></div>
-            <div class="form-group" v-if="projectModal.edit">
-                <label>分配账号（可多选）</label>
-                <div v-for="a in accounts" :key="a.id" style="margin:4px 0">
+
+            <!-- 随机延迟设置 -->
+            <div class="section-title">🎲 随机延迟设置（模拟真人，0=不延迟）</div>
+            <div class="flex-row" style="gap:8px">
+                <div class="form-group" style="flex:1"><label>任务抖动下限（分钟）</label><input type="number" v-model="projectModal.form.jitter_min" placeholder="0" min="0" max="720"></div>
+                <div class="form-group" style="flex:1"><label>任务抖动上限（分钟）</label><input type="number" v-model="projectModal.form.jitter_max" placeholder="0" min="0" max="720"></div>
+            </div>
+            <div class="flex-row" style="gap:8px">
+                <div class="form-group" style="flex:1"><label>账号间隔下限（秒）</label><input type="number" v-model="projectModal.form.account_delay_min" placeholder="0" min="0" max="43200"></div>
+                <div class="form-group" style="flex:1"><label>账号间隔上限（秒）</label><input type="number" v-model="projectModal.form.account_delay_max" placeholder="0" min="0" max="43200"></div>
+            </div>
+
+            <!-- 主目标（无子任务时使用） -->
+            <div class="section-title" v-if="!projectModal.subtasks.length">📌 默认目标（无子任务时使用）</div>
+            <div v-if="!projectModal.subtasks.length">
+                <div class="form-group"><label>目标类型</label>
+                    <select v-model="projectModal.form.target_type">
+                        <option value="bot">🤖 机器人</option>
+                        <option value="group">👥 群组</option>
+                        <option value="channel">📢 频道</option>
+                    </select>
+                </div>
+                <div class="form-group"><label>目标 <span class="help-text">{{projectModal.form.target_type==='bot'?'@username':'群组ID 或 @username'}}</span></label><input type="text" v-model="projectModal.form.target_bot" :placeholder="projectModal.form.target_type==='bot'?'@Lamhosting_bot':projectModal.form.target_type==='group'?'@mygroup 或 -1001234567890':'@mychannel'"></div>
+                <div class="form-group"><label>发送内容 *</label><input type="text" v-model="projectModal.form.message" placeholder="/check"></div>
+            </div>
+
+            <!-- 子任务列表 -->
+            <div class="section-title">📋 子任务（可多个目标同时执行）<button class="btn btn-primary btn-sm" @click="addSubtask()" style="margin-left:12px">+ 添加</button></div>
+            <div v-if="projectModal.subtasks.length" class="subtask-list">
+                <div v-for="(s,i) in projectModal.subtasks" :key="s._key" class="subtask-item">
+                    <div class="flex-row" style="gap:4px;align-items:center">
+                        <select v-model="s.target_type" style="flex:0 0 70px;padding:4px"><option value="bot">🤖</option><option value="group">👥</option><option value="channel">📢</option></select>
+                        <input type="text" v-model="s.target_bot" placeholder="目标" style="flex:1;min-width:0">
+                        <input type="text" v-model="s.message" placeholder="消息内容" style="flex:1;min-width:0">
+                        <button class="btn btn-danger btn-sm" @click="projectModal.subtasks.splice(i,1)">✕</button>
+                    </div>
+                </div>
+            </div>
+            <div v-else style="color:#999;font-size:13px;margin-bottom:10px">暂未添加子任务，将使用上方默认目标发送</div>
+
+            <!-- 分配账号（编辑模式） -->
+            <div class="section-title" v-if="projectModal.edit">👤 分配账号</div>
+            <div v-if="projectModal.edit">
+                <label style="margin-bottom:6px;display:block"><input type="checkbox" @change="toggleAllAccounts($event)" :checked="allAccountsSelected"> <strong>全选 / 取消全选</strong></label>
+                <div v-for="a in accounts" :key="a.id" style="margin:3px 0">
                     <label><input type="checkbox" :value="a.id" v-model="projectModal.assignIds"> {{a.name}} <span class="help-text">({{a.first_name||'未登录'}})</span></label>
                 </div>
-                <button class="btn btn-outline btn-sm" @click="saveAssign()" style="margin-top:8px">保存分配</button>
             </div>
             <div class="modal-actions">
                 <button class="btn btn-outline" @click="closeProjectModal()">取消</button>
-                <button class="btn btn-primary" @click="saveProject()" :disabled="projectModal.loading">保存</button>
+                <button class="btn btn-primary" @click="saveProject()" :disabled="projectModal.loading">
+                    <span v-if="projectModal.loading" class="spinner"></span>
+                    保存
+                </button>
             </div>
         </div>
     </div>
@@ -772,7 +952,7 @@ setup(){
     const fwd=reactive({target_chat_id:'',allowed_senders:'',is_enabled:false})
     const fwdLoading=ref(false),fwdMsg=ref('')
     const projects=ref([])
-    const projectModal=reactive({show:false,edit:false,loading:false,error:'',form:{name:'',target_type:'bot',target_bot:'',message:'',schedule_type:'cron',schedule_rule:'',is_enabled:true},assignIds:[],editId:null})
+    const projectModal=reactive({show:false,edit:false,loading:false,error:'',form:{name:'',target_type:'bot',target_bot:'',message:'',schedule_type:'cron',schedule_rule:'',is_enabled:true,jitter_min:0,jitter_max:0,account_delay_min:0,account_delay_max:0},assignIds:[],editId:null,subtasks:[]})
     const logs=reactive({items:[],total:0,page:1,size:20})
     const logFilter=reactive({status:'',project_id:''})
 
@@ -803,6 +983,7 @@ setup(){
 
     function maskStr(s){if(!s)return'';if(s.length<=8)return'****';return s.slice(0,4)+'****'+s.slice(-4)}
     function fmtTime(t){if(!t)return'';var d=new Date(t);return d.toLocaleString('zh-CN')}
+    function fmtSec(s){if(!s||s<60)return s+'秒';if(s<3600)return(s/60).toFixed(1)+'分';return(s/3600).toFixed(1)+'时'}
     function getAccountName(id){var a=accounts.value.find(function(x){return x.id===id});return a?a.name:'#'+id}
 
     // 账号
@@ -880,30 +1061,70 @@ setup(){
     }
     // 项目
     function showProjectModal(p){
-        projectModal.show=true;projectModal.error='';projectModal.form={name:'',target_type:'bot',target_bot:'',message:'',schedule_type:'cron',schedule_rule:'',is_enabled:true};projectModal.assignIds=[]
-        if(p){projectModal.edit=true;projectModal.editId=p.id;Object.assign(projectModal.form,{name:p.name,target_type:p.target_type||'bot',target_bot:p.target_bot,message:p.message,schedule_type:p.schedule_type,schedule_rule:p.schedule_rule,is_enabled:p.is_enabled});projectModal.assignIds=[].concat(p.account_ids)}
-        else{projectModal.edit=false;projectModal.editId=null}
+        projectModal.show=true;projectModal.error='';projectModal.form={name:'',target_type:'bot',target_bot:'',message:'',schedule_type:'cron',schedule_rule:'',is_enabled:true,jitter_min:0,jitter_max:0,account_delay_min:0,account_delay_max:0};projectModal.assignIds=[];projectModal.subtasks=[]
+        if(p){
+            projectModal.edit=true;projectModal.editId=p.id
+            var schedRule=p.schedule_rule
+            // jitter 后端存秒，前端显示分钟
+            var jmin=Math.round((p.jitter_min||0)/60*10)/10
+            var jmax=Math.round((p.jitter_max||0)/60*10)/10
+            Object.assign(projectModal.form,{name:p.name,target_type:p.target_type||'bot',target_bot:p.target_bot,message:p.message,schedule_type:p.schedule_type,schedule_rule:schedRule,is_enabled:p.is_enabled,jitter_min:jmin,jitter_max:jmax,account_delay_min:p.account_delay_min||0,account_delay_max:p.account_delay_max||0})
+            projectModal.assignIds=[].concat(p.account_ids)
+            // 加载子任务
+            projectModal.subtasks=(p.subtasks||[]).map(function(s){return {_key:'s'+s.id,target_type:s.target_type,target_bot:s.target_bot,message:s.message,sort_order:s.sort_order,id:s.id}})
+        }else{projectModal.edit=false;projectModal.editId=null}
     }
+    function addSubtask(){projectModal.subtasks.push({_key:'new_'+Date.now(),target_type:'bot',target_bot:'',message:'',sort_order:projectModal.subtasks.length})}
     function closeProjectModal(){projectModal.show=false}
+    var allAccountsSelected=ref(false)
+    function toggleAllAccounts(e){allAccountsSelected.value=e.target.checked;if(e.target.checked){projectModal.assignIds=accounts.value.map(function(a){return a.id})}else{projectModal.assignIds=[]}}
     async function saveProject(){
         projectModal.loading=true;projectModal.error=''
         try{
-            var payload=Object.assign({},projectModal.form,{schedule_rule:String(projectModal.form.schedule_rule),target_type:projectModal.form.target_type})
-            if(projectModal.edit){await axios.put('/api/projects/'+projectModal.editId,payload)}
-            else{var r=await axios.post('/api/projects',payload);projectModal.editId=r.data.id;projectModal.edit=true}
+            var form=Object.assign({},projectModal.form)
+            form.jitter_min=Math.round(parseFloat(form.jitter_min||0)*60) // 分钟转秒
+            form.jitter_max=Math.round(parseFloat(form.jitter_max||0)*60)
+            form.schedule_rule=String(form.schedule_rule)
+
+            if(projectModal.edit){
+                await axios.put('/api/projects/'+projectModal.editId,form)
+            }else{
+                var r=await axios.post('/api/projects',form);projectModal.editId=r.data.id;projectModal.edit=true
+            }
+
+            // 保存账号分配
+            if(projectModal.editId){
+                await axios.put('/api/projects/'+projectModal.editId+'/accounts',{account_ids:projectModal.assignIds})
+            }
+
+            // 保存子任务：删除旧的，创建新的
+            if(projectModal.editId){
+                // 获取当前子任务
+                var r2=await axios.get('/api/projects/'+projectModal.editId+'/subtasks')
+                var oldIds=r2.data.map(function(s){return s.id})
+                // 删除旧的
+                for(var i=0;i<oldIds.length;i++){await axios.delete('/api/subtasks/'+oldIds[i]).catch(function(){})}
+                // 创建新的
+                for(var j=0;j<projectModal.subtasks.length;j++){
+                    var s=projectModal.subtasks[j]
+                    await axios.post('/api/projects/'+projectModal.editId+'/subtasks',{target_type:s.target_type,target_bot:s.target_bot,message:s.message,sort_order:j})
+                }
+            }
+
             closeProjectModal();loadProjects();loadDash()
         }catch(e){projectModal.error=errMsg(e)}
         projectModal.loading=false
     }
-    async function saveAssign(){try{await axios.put('/api/projects/'+projectModal.editId+'/accounts',{account_ids:projectModal.assignIds});loadProjects()}catch(e){alert('保存失败: '+errMsg(e))}}
+    async function toggleProject(id){try{var p=projects.value.find(function(x){return x.id===id});if(!p)return;await axios.put('/api/projects/'+id,{is_enabled:!p.is_enabled});loadProjects();loadDash()}catch(e){alert('切换失败: '+errMsg(e))}}
+    async function moveProject(id,dir){try{await axios.put('/api/projects/'+id+'/move?direction='+dir);loadProjects()}catch(e){alert('排序失败: '+errMsg(e))}}
     async function deleteProject(id){if(!confirm('确认删除此项目？'))return;await axios.delete('/api/projects/'+id);loadProjects();loadDash()}
     async function execProject(id){try{var r=await axios.post('/api/projects/'+id+'/execute');alert('执行结果: '+JSON.stringify(r.data.results,null,2));loadLogs();loadDash()}catch(e){alert('执行失败: '+errMsg(e))}}
     async function clearLogs(){if(!confirm('确认清空所有日志？'))return;await axios.delete('/api/logs');loadLogs();loadDash()}
 
     return{tab,dash,recentLogs,accounts,accountModal,fwd,fwdLoading,fwdMsg,projects,projectModal,logs,logFilter,
-        maskStr,fmtTime,getAccountName,
+        maskStr,fmtTime,fmtSec,getAccountName,
         showAccountModal,closeAccountModal,saveAccount,sendCode,verifyCode,startQrLogin,cancelQrLogin,connectAccount,logoutAccount,deleteAccount,
-        saveForward,showProjectModal,closeProjectModal,saveProject,saveAssign,deleteProject,execProject,loadLogs,goPage,clearLogs}
+        saveForward,showProjectModal,closeProjectModal,saveProject,addSubtask,toggleAllAccounts,allAccountsSelected,toggleProject,moveProject,deleteProject,execProject,loadLogs,goPage,clearLogs}
 }
 }).mount('#app')
 </script>

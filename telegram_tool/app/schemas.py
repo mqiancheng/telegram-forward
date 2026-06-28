@@ -78,6 +78,10 @@ class ProjectCreate(BaseModel):
     message: str = Field(..., min_length=1, max_length=500)
     schedule_type: str = Field(default="cron", pattern="^(cron|interval)$")
     schedule_rule: str = Field(..., min_length=1, max_length=100)
+    jitter_min: int = Field(default=0, ge=0, le=43200)
+    jitter_max: int = Field(default=0, ge=0, le=43200)
+    account_delay_min: int = Field(default=0, ge=0, le=43200)
+    account_delay_max: int = Field(default=0, ge=0, le=43200)
 
 
 class ProjectUpdate(BaseModel):
@@ -88,6 +92,11 @@ class ProjectUpdate(BaseModel):
     schedule_type: Optional[str] = None
     schedule_rule: Optional[str] = None
     is_enabled: Optional[bool] = None
+    jitter_min: Optional[int] = Field(None, ge=0, le=43200)
+    jitter_max: Optional[int] = Field(None, ge=0, le=43200)
+    account_delay_min: Optional[int] = Field(None, ge=0, le=43200)
+    account_delay_max: Optional[int] = Field(None, ge=0, le=43200)
+    sort_order: Optional[int] = None
 
 
 class ProjectAssignAccounts(BaseModel):
@@ -104,8 +113,42 @@ class ProjectResponse(BaseModel):
     schedule_rule: str
     is_enabled: bool
     account_ids: List[int] = []
+    jitter_min: int = 0
+    jitter_max: int = 0
+    account_delay_min: int = 0
+    account_delay_max: int = 0
+    sort_order: int = 0
+    subtasks: List["SubTaskResponse"] = []
     created_at: datetime
     updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# ============ 子任务 ============
+
+class SubTaskCreate(BaseModel):
+    target_type: str = Field(default="bot", pattern="^(bot|group|channel)$")
+    target_bot: str = Field(..., min_length=1, max_length=200)
+    message: str = Field(..., min_length=1, max_length=500)
+    sort_order: int = Field(default=0)
+
+
+class SubTaskUpdate(BaseModel):
+    target_type: Optional[str] = None
+    target_bot: Optional[str] = Field(None, max_length=200)
+    message: Optional[str] = Field(None, max_length=500)
+    sort_order: Optional[int] = None
+
+
+class SubTaskResponse(BaseModel):
+    id: int
+    project_id: int
+    target_type: str
+    target_bot: str
+    message: str
+    sort_order: int
 
     class Config:
         from_attributes = True

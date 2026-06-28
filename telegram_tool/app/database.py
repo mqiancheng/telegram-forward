@@ -45,6 +45,11 @@ def _migrate():
     logger = logging.getLogger(__name__)
     migrations = [
         ("target_type", "projects", "VARCHAR(20) NOT NULL DEFAULT 'bot'"),
+        ("jitter_min", "projects", "INTEGER NOT NULL DEFAULT 0"),
+        ("jitter_max", "projects", "INTEGER NOT NULL DEFAULT 0"),
+        ("account_delay_min", "projects", "INTEGER NOT NULL DEFAULT 0"),
+        ("account_delay_max", "projects", "INTEGER NOT NULL DEFAULT 0"),
+        ("sort_order", "projects", "INTEGER NOT NULL DEFAULT 0"),
     ]
     with engine.connect() as conn:
         for col_name, table, col_def in migrations:

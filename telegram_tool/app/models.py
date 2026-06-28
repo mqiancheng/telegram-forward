@@ -59,17 +59,43 @@ class Project(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(200), nullable=False, comment="项目名称")
-    target_type = Column(String(20), nullable=False, default="bot", comment="bot / group / channel")
-    target_bot = Column(String(200), nullable=False, comment="目标 @username 或 Chat ID")
-    message = Column(String(500), nullable=False, comment="发送的消息内容")
+    target_type = Column(String(20), nullable=False, default="bot", comment="bot / group / channel（无子任务时使用）")
+    target_bot = Column(String(200), nullable=False, comment="目标 @username 或 Chat ID（无子任务时使用）")
+    message = Column(String(500), nullable=False, comment="发送的消息内容（无子任务时使用）")
     schedule_type = Column(String(20), nullable=False, default="cron", comment="cron / interval")
     schedule_rule = Column(String(100), nullable=False, comment="cron表达式 或 间隔秒数")
     is_enabled = Column(Boolean, default=True)
+
+    # 随机延迟配置（秒），0 表示不启用随机延迟
+    jitter_min = Column(Integer, default=0, comment="任务级随机延迟下限（秒），0=不延迟")
+    jitter_max = Column(Integer, default=0, comment="任务级随机延迟上限（秒）")
+    account_delay_min = Column(Integer, default=0, comment="账号间随机间隔下限（秒），0=不延迟")
+    account_delay_max = Column(Integer, default=0, comment="账号间随机间隔上限（秒）")
+
+    # 排序
+    sort_order = Column(Integer, default=0, comment="排序值，越小越靠前")
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     accounts = relationship("Account", secondary=project_accounts, back_populates="projects")
     logs = relationship("TaskLog", back_populates="project", cascade="all, delete-orphan")
+    subtasks = relationship("SubTask", back_populates="project", cascade="all, delete-orphan", order_by="SubTask.sort_order")
+
+
+class SubTask(Base):
+    """项目子任务（每个项目可含多个目标）"""
+    __tablename__ = "subtask"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(Integer, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    target_type = Column(String(20), nullable=False, default="bot", comment="bot / group / channel")
+    target_bot = Column(String(200), nullable=False, comment="目标 @username 或 Chat ID")
+    message = Column(String(500), nullable=False, comment="发送的消息内容")
+    sort_order = Column(Integer, default=0, comment="排序值，越小越靠前")
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    project = relationship("Project", back_populates="subtasks")
 
 
 class TaskLog(Base):

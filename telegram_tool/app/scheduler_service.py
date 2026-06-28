@@ -5,6 +5,7 @@
 
 import asyncio
 import logging
+import random
 from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,6 +21,15 @@ except ImportError:
     from client_manager import client_manager
 
 logger = logging.getLogger(__name__)
+
+# 默认随机延迟配置（单位：秒），项目未配置时使用
+DEFAULT_JITTER_MIN = 30
+DEFAULT_JITTER_MAX = 180
+DEFAULT_DELAY_MIN = 10
+DEFAULT_DELAY_MAX = 60
+
+# 子任务间间隔（秒）
+SUBTASK_DELAY = 3
 
 
 class SchedulerService:
@@ -92,8 +102,8 @@ class SchedulerService:
             logger.info(f"Job removed: project #{project_id}")
 
     async def execute_now(self, project_id: int) -> list[dict]:
-        """立即手动执行一次项目任务，返回执行结果列表"""
-        return await self._execute_project(project_id)
+        """立即手动执行一次项目任务（跳过随机延迟），返回执行结果列表"""
+        return await self._execute_project(project_id, skip_delay=True)
 
     # ==================== 内部方法 ====================
 
@@ -107,8 +117,8 @@ class SchedulerService:
         finally:
             db.close()
 
-    async def _execute_project(self, project_id: int) -> list[dict]:
-        """执行一个项目：遍历其关联的所有账号，发送消息"""
+    async def _execute_project(self, project_id: int, skip_delay: bool = False) -> list[dict]:
+        """执行一个项目：遍历子任务和账号，发送消息（定时任务含随机延迟，手动执行跳过延迟）"""
         db = SessionLocal()
         results = []
 
@@ -122,20 +132,64 @@ class SchedulerService:
                 logger.warning(f"Project '{project.name}': no accounts assigned")
                 return results
 
-            for account in accounts:
-                if not account.is_active:
-                    continue
+            # 过滤启用的账号
+            active_accounts = [a for a in accounts if a.is_active]
+            if not active_accounts:
+                logger.info(f"Project '{project.name}': no active accounts")
+                return results
 
-                result = await self._send_for_account(db, project, account)
-                results.append(result)
+            # 构建发信目标列表：优先用子任务，否则用项目主目标
+            subtask_list = sorted(project.subtasks, key=lambda s: s.sort_order) if project.subtasks else []
+            if subtask_list:
+                targets = [
+                    {"target_bot": s.target_bot, "message": s.message, "target_type": s.target_type}
+                    for s in subtask_list
+                ]
+            else:
+                targets = [
+                    {"target_bot": project.target_bot, "message": project.message, "target_type": project.target_type}
+                ]
+
+            if not skip_delay:
+                # 任务级随机抖动（使用项目配置，否则默认值）
+                jitter_min = project.jitter_min if project.jitter_min > 0 else DEFAULT_JITTER_MIN
+                jitter_max = project.jitter_max if project.jitter_max > 0 else DEFAULT_JITTER_MAX
+                if jitter_min > 0 and jitter_max > jitter_min:
+                    jitter = random.randint(jitter_min, jitter_max)
+                    logger.info(
+                        f"[{project.name}] jitter delay {jitter}s "
+                        f"before executing with {len(active_accounts)} accounts, {len(targets)} targets"
+                    )
+                    await asyncio.sleep(jitter)
+
+            for i, account in enumerate(active_accounts):
+                if not skip_delay:
+                    # 账号间随机间隔
+                    delay_min = project.account_delay_min if project.account_delay_min > 0 else DEFAULT_DELAY_MIN
+                    delay_max = project.account_delay_max if project.account_delay_max > 0 else DEFAULT_DELAY_MAX
+                    if i > 0 and delay_min > 0 and delay_max > delay_min:
+                        delay = random.randint(delay_min, delay_max)
+                        logger.info(f"[{project.name}] waiting {delay}s before next account...")
+                        await asyncio.sleep(delay)
+
+                # 对该账号发送所有子任务
+                for j, target in enumerate(targets):
+                    if j > 0 and not skip_delay:
+                        await asyncio.sleep(SUBTASK_DELAY)
+
+                    result = await self._send_for_account(db, project, account,
+                                                          target["target_bot"], target["message"],
+                                                          target.get("target_type", "bot"))
+                    results.append(result)
 
         finally:
             db.close()
 
         return results
 
-    async def _send_for_account(self, db: Session, project: Project, account: Account) -> dict:
-        """通过单个账号发送签到消息"""
+    async def _send_for_account(self, db: Session, project: Project, account: Account,
+                                 target_bot: str, message: str, target_type: str = "bot") -> dict:
+        """通过单个账号发送消息到指定目标"""
         now = datetime.now(timezone.utc)
 
         try:
@@ -153,8 +207,8 @@ class SchedulerService:
             # 发送消息
             await client_manager.send_message(
                 account.id,
-                project.target_bot,
-                project.message,
+                target_bot,
+                message,
             )
 
             # 记录成功日志
@@ -164,14 +218,14 @@ class SchedulerService:
                 account_name=account.name,
                 project_name=project.name,
                 status="success",
-                detail=f"Sent: {project.message}",
+                detail=f"[{target_type}] → {target_bot}: {message}",
                 created_at=now,
             )
             db.add(log)
             db.commit()
 
-            logger.info(f"[{project.name}] {account.name} → {project.target_bot}: {project.message}")
-            return {"account": account.name, "status": "success"}
+            logger.info(f"[{project.name}] {account.name} → {target_bot}: {message}")
+            return {"account": account.name, "target": target_bot, "status": "success"}
 
         except Exception as e:
             err_msg = str(e)
@@ -188,7 +242,7 @@ class SchedulerService:
             db.commit()
 
             logger.error(f"[{project.name}] {account.name} failed: {err_msg}")
-            return {"account": account.name, "status": "error", "message": err_msg}
+            return {"account": account.name, "target": target_bot, "status": "error", "message": err_msg}
 
 
 # 全局单例
